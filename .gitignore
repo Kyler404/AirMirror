@@ -1,0 +1,36 @@
+# 构建树与 SDK（Qt 1.9 GB，不入库）
+/build/
+
+# 构建产物
+/client/
+/dist/
+
+# 调试残留
+/shots/
+__pycache__/
+*.pyc
+*.obj
+*.dmp
+*.log
+ui_heartbeat.txt
+imgui.ini
+
+# 运行时凭据（AirPlay 配对身份，每台机器一份）
+identity.key
+
+# 虚拟环境 / 依赖缓存
+.venv/
+venv/
+node_modules/
+
+# 签名私钥（公钥 .cer 可入库，私钥绝不）
+*.pfx
+*.p12
+*.pem
+signing.key
+tools/*.snk
+
+# 系统垃圾
+Thumbs.db
+desktop.ini
+.DS_Store

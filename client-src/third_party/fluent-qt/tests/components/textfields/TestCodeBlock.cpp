@@ -1,0 +1,523 @@
+#include <gtest/gtest.h>
+#include <QApplication>
+#include <QClipboard>
+#include <QPointer>
+#include <QPainter>
+#include <QScopeGuard>
+#include <QScrollBar>
+#include <QSignalSpy>
+#include <QTest>
+#include <QTextDocument>
+#include <QTextBlock>
+#include <QTextCursor>
+#include <QVBoxLayout>
+#if defined(Q_OS_WIN)
+#include <qt_windows.h>
+#undef small
+#include <chrono>
+#include <future>
+#include <thread>
+#endif
+
+#include <FluentQt/TextFields.h>
+#include "components/textfields/private/CodeHighlighter_p.h"
+#include "compatibility/private/ClipboardCompat_p.h"
+#include "components/basicinput/Button.h"
+#include "components/scrolling/ScrollView.h"
+
+using fluent::textfields::CodeBlock;
+using fluent::textfields::Label;
+using fluent::basicinput::Button;
+using fluent::scrolling::ScrollView;
+
+namespace {
+class CodeBlockTest : public testing::Test {
+protected:
+    void SetUp() override
+    {
+        previousTheme = fluent::FluentElement::currentTheme();
+        fluent::FluentElement::setTheme(fluent::FluentElement::Light);
+    }
+    void TearDown() override { fluent::FluentElement::setTheme(previousTheme); }
+    fluent::FluentElement::Theme previousTheme;
+};
+} // namespace
+
+TEST_F(CodeBlockTest, SmallPublicContractNormalizesValuesAndDoesNotRepeatSignals)
+{
+    CodeBlock block;
+    EXPECT_TRUE(block.isExpanded());
+    EXPECT_TRUE(block.isWordWrapEnabled());
+    EXPECT_EQ(block.maxVisibleLines(), 16);
+    EXPECT_EQ(block.language(), QStringLiteral("plain"));
+    auto* copy = block.findChild<Button*>(QStringLiteral("fluentCodeBlockCopyButton"));
+    ASSERT_NE(copy, nullptr);
+    EXPECT_FALSE(copy->isEnabled());
+    QSignalSpy languageChanged(&block, &CodeBlock::languageChanged);
+    block.setLanguage(QStringLiteral(" C++ "));
+    block.setLanguage(QStringLiteral("cpp"));
+    EXPECT_EQ(languageChanged.count(), 1);
+    EXPECT_EQ(block.headerText(), QStringLiteral("C++"));
+    block.setLanguage(QStringLiteral("py"));
+    EXPECT_EQ(block.language(), QStringLiteral("python"));
+    block.setLanguage(QStringLiteral("JSON"));
+    EXPECT_EQ(block.language(), QStringLiteral("json"));
+    QSignalSpy limitChanged(&block, &CodeBlock::maxVisibleLinesChanged);
+    block.setMaxVisibleLines(-1);
+    block.setMaxVisibleLines(0);
+    EXPECT_EQ(limitChanged.count(), 1);
+    EXPECT_EQ(block.maxVisibleLines(), 0);
+    QSignalSpy codeChanged(&block, &CodeBlock::codeChanged);
+    block.setCode(QStringLiteral("{\"value\": 2}"));
+    block.setCode(block.code());
+    EXPECT_EQ(codeChanged.count(), 1);
+    EXPECT_TRUE(copy->isEnabled());
+}
+
+TEST_F(CodeBlockTest, CopyAndSelectionPreserveSourceInHighlightedPlainAndHighContrastModes)
+{
+    const QString source = QStringLiteral("prefix\tType::Nested::Value, \"real\u200bvalue\";  \r\n\tsuffix");
+    CodeBlock block(source);
+    block.resize(420, block.sizeHint().height());
+    block.show();
+    auto* label = block.findChild<Label*>(QStringLiteral("fluentCodeBlockText"));
+    ASSERT_NE(label, nullptr);
+    QSignalSpy copied(&block, &CodeBlock::copyFinished);
+    for (const QString& language :
+        {QStringLiteral("cpp"), QStringLiteral("python"), QStringLiteral("qml"), QStringLiteral("unknown")}) {
+        SCOPED_TRACE(language.toStdString());
+        block.setLanguage(language);
+        for (auto theme : {fluent::FluentElement::Light, fluent::FluentElement::HighContrast}) {
+            fluent::FluentElement::setTheme(theme);
+            QApplication::processEvents();
+            block.copy();
+            EXPECT_EQ(QApplication::clipboard()->text(), source);
+            EXPECT_TRUE(copied.last().at(0).toBool());
+            QTest::keySequence(label, QKeySequence(QKeySequence::SelectAll));
+            QTest::keySequence(label, QKeySequence(QKeySequence::Copy));
+            EXPECT_EQ(QApplication::clipboard()->text(), source);
+            QTextDocument rendered;
+            rendered.setHtml(label->text());
+            const int end = rendered.toPlainText().indexOf(QStringLiteral("suffix"));
+            label->setSelection(6, end - 6);
+            QTest::keySequence(label, QKeySequence(QKeySequence::Copy));
+            EXPECT_EQ(QApplication::clipboard()->text(), source.mid(6, source.indexOf(QStringLiteral("suffix")) - 6));
+        }
+    }
+}
+
+TEST_F(CodeBlockTest, CopyButtonIsKeyboardReachableAndDoesNotToggleFolding)
+{
+    CodeBlock block(QStringLiteral("answer = 42"));
+    block.resize(400, block.sizeHint().height());
+    block.show();
+    QApplication::processEvents();
+    auto* copy = block.findChild<Button*>(QStringLiteral("fluentCodeBlockCopyButton"));
+    ASSERT_NE(copy, nullptr);
+    EXPECT_NE(copy->focusPolicy(), Qt::NoFocus);
+    EXPECT_FALSE(copy->accessibleName().isEmpty());
+    QSignalSpy expanded(&block, &CodeBlock::expandedChanged);
+    QTest::mouseClick(copy, Qt::LeftButton);
+    EXPECT_TRUE(block.isExpanded());
+    EXPECT_EQ(expanded.count(), 0);
+    block.setExpandedAnimated(false, false);
+    EXPECT_EQ(block.findChild<Label*>(QStringLiteral("fluentCodeBlockText"))->focusPolicy(), Qt::NoFocus);
+    copy->click();
+    EXPECT_FALSE(block.isExpanded());
+    EXPECT_EQ(QApplication::clipboard()->text(), block.code());
+}
+
+TEST_F(CodeBlockTest, BoundedContentScrollsAndUnlimitedContentReflows)
+{
+    QWidget window;
+    auto* layout = new QVBoxLayout(&window);
+    layout->setAlignment(Qt::AlignTop);
+    auto* block = new CodeBlock(QStringLiteral("result = fluentqt.Button.ButtonStyle.Accent\n").repeated(40), &window);
+    block->setLanguage(QStringLiteral("python"));
+    block->setLayoutDirection(Qt::RightToLeft);
+    block->setMaxVisibleLines(5);
+    layout->addWidget(block);
+    window.resize(500, 800);
+    window.show();
+    QApplication::processEvents();
+    auto* scroll = block->findChild<ScrollView*>(QStringLiteral("fluentCodeBlockScroll"));
+    auto* label = block->findChild<Label*>(QStringLiteral("fluentCodeBlockText"));
+    ASSERT_NE(scroll, nullptr);
+    ASSERT_NE(label, nullptr);
+    EXPECT_EQ(scroll->layoutDirection(), Qt::LeftToRight);
+    Label fiveLines;
+    fiveLines.setFont(label->font());
+    fiveLines.setTextFormat(Qt::RichText);
+    fiveLines.setText(QStringLiteral("<span>x<br/>x<br/>x<br/>x<br/>x</span>"));
+    const int fiveLineHeight = fiveLines.heightForWidth(label->width());
+    EXPECT_GE(scroll->viewport()->height(), fiveLineHeight);
+    EXPECT_LT(scroll->height(), label->height() / 2);
+    EXPECT_GT(scroll->verticalScrollBar()->maximum(), 0);
+    scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+    EXPECT_GT(scroll->verticalScrollBar()->value(), 0);
+    block->setCode(
+        QStringLiteral("result = fluentqt.Button.ButtonStyle.Accent + fluentqt.Button.ButtonLayout.IconBefore\n")
+            .repeated(3));
+    EXPECT_EQ(scroll->verticalScrollBar()->value(), 0);
+    block->setMaxVisibleLines(0);
+    QApplication::processEvents();
+    const int wideHeight = block->height();
+    window.resize(280, 800);
+    QApplication::processEvents();
+    EXPECT_GT(block->height(), wideHeight);
+    EXPECT_EQ(scroll->verticalScrollBar()->maximum(), 0);
+    EXPECT_EQ(scroll->horizontalScrollBar()->maximum(), 0);
+    block->setWordWrap(false);
+    QApplication::processEvents();
+    EXPECT_GT(scroll->horizontalScrollBar()->maximum(), 0);
+    EXPECT_LT(block->height(), wideHeight);
+}
+
+TEST_F(CodeBlockTest, VisibleLineLimitFitsRowsWithFallbackFontsAndWrapOpportunities)
+{
+    const QString sixLines = QStringLiteral("// Example\nitems = [\n")
+        + QStringLiteral("    {\"name\": \"中文\", \"path\": \"workspace/design\"},\n").repeated(3)
+        + QStringLiteral("]");
+    CodeBlock reference(sixLines);
+    reference.setLanguage(QStringLiteral("python"));
+    reference.setMaxVisibleLines(0);
+    reference.setWordWrap(false);
+    reference.resize(700, reference.height());
+    reference.show();
+    CodeBlock bounded(sixLines + QStringLiteral("\n") + sixLines);
+    bounded.setLanguage(QStringLiteral("python"));
+    bounded.setMaxVisibleLines(6);
+    bounded.setWordWrap(false);
+    bounded.resize(700, bounded.height());
+    bounded.show();
+    QApplication::processEvents();
+    auto* fullText = reference.findChild<Label*>(QStringLiteral("fluentCodeBlockText"));
+    auto* scroll = bounded.findChild<ScrollView*>(QStringLiteral("fluentCodeBlockScroll"));
+    ASSERT_NE(fullText, nullptr);
+    ASSERT_NE(scroll, nullptr);
+    EXPECT_GE(scroll->viewport()->height(), fullText->height());
+    EXPECT_LE(scroll->viewport()->height(), fullText->height() + 1);
+    EXPECT_GT(scroll->verticalScrollBar()->maximum(), 0);
+}
+
+TEST_F(CodeBlockTest, CollapsedUpdatesAreLazyAndExpansionUsesTheLatestCode)
+{
+    CodeBlock block(QStringLiteral("old"));
+    block.setExpandedAnimated(false, false);
+    auto* label = block.findChild<Label*>(QStringLiteral("fluentCodeBlockText"));
+    ASSERT_NE(label, nullptr);
+    block.setCode(QStringLiteral("new <b>source</b>"));
+    EXPECT_TRUE(label->text().isEmpty());
+    block.setExpandedAnimated(true, false);
+    QTextDocument rendered;
+    rendered.setHtml(label->text());
+    EXPECT_EQ(rendered.toPlainText(), block.code());
+}
+
+TEST_F(CodeBlockTest, ClipboardObserverMayDestroyTheBlockDuringCopy)
+{
+    QPointer<CodeBlock> block = new CodeBlock(QStringLiteral("clipboard lifetime"));
+    const auto cleanup = qScopeGuard([&] { delete block.data(); });
+    int completions = 0;
+    QObject::connect(block, &CodeBlock::copyFinished, qApp, [&](bool copied) {
+        EXPECT_TRUE(block);
+        EXPECT_TRUE(copied);
+        ++completions;
+    });
+    QObject::connect(QApplication::clipboard(), &QClipboard::dataChanged, block, [block] { delete block.data(); });
+    block->copy();
+    // Some hosts notify after setText returns. Only synchronous destruction
+    // cancels this completion; neither path may complete after destruction.
+    if (block.isNull())
+        EXPECT_EQ(completions, 0);
+    else
+        EXPECT_EQ(completions, 1);
+    const int beforeNotification = completions;
+    EXPECT_TRUE(QTest::qWaitFor([&] { return block.isNull(); }));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(completions, beforeNotification);
+}
+
+enum class TestLanguage { Cpp, Python };
+
+TEST_F(CodeBlockTest, Contract_ClipboardCompletionFollowsTheHostWrite)
+{
+    QObject context;
+    const QString source = QStringLiteral("// 中文\nvalue = 1;\n");
+    int completions = 0;
+    ::compatibility::detail::copyText(&context, source, [&](bool copied) {
+        ++completions;
+        EXPECT_TRUE(copied);
+        EXPECT_EQ(QApplication::clipboard()->text(), source);
+    });
+    EXPECT_EQ(completions, 1);
+}
+
+TEST_F(CodeBlockTest, Contract_ClipboardCompletionDoesNotOutliveItsContext)
+{
+    QApplication::clipboard()->setText(QStringLiteral("before context cancellation"));
+    QPointer<QObject> context = new QObject;
+    const auto cleanup = qScopeGuard([&] { delete context.data(); });
+    int completions = 0;
+    QObject::connect(QApplication::clipboard(), &QClipboard::dataChanged, context, [context] {
+        delete context.data();
+    });
+    ::compatibility::detail::copyText(context, QStringLiteral("context cancellation payload"), [&](bool copied) {
+        EXPECT_TRUE(context);
+        EXPECT_TRUE(copied);
+        ++completions;
+    });
+    // Native clipboard notifications can be queued after the successful write.
+    // Preserve the immediate cancellation assertion on synchronous hosts.
+    if (context.isNull())
+        EXPECT_EQ(completions, 0);
+    else
+        EXPECT_EQ(completions, 1);
+    const int beforeNotification = completions;
+    EXPECT_TRUE(QTest::qWaitFor([&] { return context.isNull(); }));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(completions, beforeNotification);
+}
+
+TEST_F(CodeBlockTest, Contract_WindowsClipboardLockReportsCopyFailure)
+{
+#if defined(Q_OS_WIN)
+    if (QGuiApplication::platformName() != QStringLiteral("windows"))
+        GTEST_SKIP() << "Requires the native Windows clipboard.";
+
+    std::promise<bool> locked;
+    std::promise<void> release;
+    auto ready = locked.get_future();
+    auto released = release.get_future();
+    std::thread holder([&] {
+        HWND window = CreateWindowExW(0, L"STATIC", L"FluentQt clipboard test", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
+            nullptr, nullptr);
+        bool acquired = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (window && std::chrono::steady_clock::now() < deadline) {
+            if (OpenClipboard(window)) {
+                acquired = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        locked.set_value(acquired);
+        released.wait();
+        if (acquired)
+            CloseClipboard();
+        if (window)
+            DestroyWindow(window);
+    });
+    const auto cleanup = qScopeGuard([&] {
+        release.set_value();
+        holder.join();
+    });
+    ASSERT_TRUE(ready.get()) << "The controlled clipboard lock could not be acquired.";
+
+    CodeBlock block(QStringLiteral("The clipboard is deliberately unavailable."));
+    QSignalSpy copied(&block, &CodeBlock::copyFinished);
+    block.copy();
+    ASSERT_EQ(copied.count(), 1);
+    EXPECT_FALSE(copied.first().at(0).toBool());
+    EXPECT_FALSE(QApplication::clipboard()->ownsClipboard());
+#else
+    GTEST_SKIP() << "Requires the native Windows clipboard.";
+#endif
+}
+
+TEST_F(CodeBlockTest, Contract_CodeHighlightingPreservesWhitespaceWhileWrapping)
+{
+    const QString source = QStringLiteral(
+        "    value = Type::Nested::Value;\r\n"
+        "\t// keep  two spaces & < >\r\n"
+        "next();");
+    const QString expected = QStringLiteral(
+        "    value = Type::Nested::Value;\n"
+        "    // keep  two spaces & < >\n"
+        "next();");
+    for (bool dark : {false, true}) {
+        const QString cpp = fluent::textfields::detail::highlightCppToHtml(source, dark);
+        const QString python = fluent::textfields::detail::highlightPythonToHtml(source, dark);
+        for (const QString& html : {cpp, python}) {
+            QTextDocument document;
+            document.setHtml(html);
+            QString plain = document.toPlainText();
+            plain.remove(QChar(0x200b));
+            EXPECT_EQ(plain, expected);
+            EXPECT_TRUE(html.contains(QStringLiteral("&nbsp;&nbsp;&nbsp;&nbsp;")));
+            EXPECT_TRUE(html.contains(QStringLiteral("keep&nbsp; two spaces")));
+            EXPECT_FALSE(html.contains(QStringLiteral("keep&nbsp;&nbsp;two&nbsp;spaces")));
+        }
+        EXPECT_TRUE(cpp.contains(QStringLiteral("::&#8203;")));
+        const QString dotted = fluent::textfields::detail::highlightPythonToHtml(
+            QStringLiteral("fluentqt.Button.ButtonStyle.Accent, value"), dark);
+        EXPECT_TRUE(dotted.contains(QStringLiteral(".&#8203;")));
+        EXPECT_TRUE(dotted.contains(QStringLiteral(",&#8203;")));
+        EXPECT_FALSE(dotted.contains(QStringLiteral("fluentqt.&#8203;")));
+    }
+}
+
+TEST_F(CodeBlockTest, Contract_CodeHighlightingMapsRenderedCharactersToExactSource)
+{
+    const QString source = QStringLiteral(
+        "\tType::Nested::Value, fluentqt.Button.Style.Accent;  \r\n"
+        "    // keep  spaces\r\n\t\"real\u200bvalue\"\r\n");
+    for (bool dark : {false, true}) {
+        for (const auto language : {TestLanguage::Cpp, TestLanguage::Python}) {
+            fluent::textfields::detail::CodeSourceMap map;
+            const QString html = language == TestLanguage::Cpp
+                ? fluent::textfields::detail::highlightCppToHtml(source, dark, &map)
+                : fluent::textfields::detail::highlightPythonToHtml(source, dark, &map);
+            QTextDocument document;
+            document.setHtml(html);
+            const QString rendered = document.toPlainText();
+            ASSERT_EQ(map.size(), rendered.size());
+            QString reconstructed;
+            int sourceEnd = 0;
+            int syntheticBreaks = 0;
+            int originalBreaks = 0;
+            for (int i = 0; i < map.size(); ++i) {
+                const auto& span = map.at(i);
+                ASSERT_GE(span.start, 0);
+                ASSERT_GE(span.end, span.start);
+                ASSERT_LE(span.end, source.size());
+                if (span.start == span.end) {
+                    EXPECT_EQ(rendered.at(i), QChar(0x200b));
+                    ++syntheticBreaks;
+                    continue;
+                }
+                if (source.at(span.start) == QChar(0x200b))
+                    ++originalBreaks;
+                if (span.end > sourceEnd) {
+                    EXPECT_EQ(span.start, sourceEnd);
+                    reconstructed += source.mid(span.start, span.end - span.start);
+                    sourceEnd = span.end;
+                }
+            }
+            EXPECT_GT(syntheticBreaks, 0);
+            EXPECT_EQ(originalBreaks, 1);
+            EXPECT_EQ(reconstructed, source);
+        }
+    }
+}
+
+TEST_F(CodeBlockTest, Contract_SourceLinesUseIndependentBlocksWithoutLosingBlankLinesOrTokenColors)
+{
+    for (const QString& language : {QStringLiteral("cpp"), QStringLiteral("python"), QStringLiteral("plain")}) {
+        const QString source = language == QStringLiteral("python")
+            ? QStringLiteral("\n\nvalue = \"\"\"first\r\nsecond\n\nlast\"\"\"\n\n")
+            : QStringLiteral("\n\n/* first\r\nsecond\n\nlast */\n\n");
+        QString expected = source;
+        expected.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+        fluent::textfields::detail::CodeSourceMap map;
+        QTextDocument document;
+        document.setHtml(fluent::textfields::detail::highlightCodeToHtml(source, language, true, &map));
+        EXPECT_EQ(document.toPlainText(), expected);
+        EXPECT_EQ(map.size(), expected.size());
+        EXPECT_EQ(document.blockCount(), expected.count(QLatin1Char('\n')) + 1)
+            << "Clipped code painting must be able to skip offscreen source lines";
+        for (auto block = document.begin(); block.isValid(); block = block.next()) {
+            EXPECT_EQ(block.blockFormat().topMargin(), 0);
+            EXPECT_EQ(block.blockFormat().bottomMargin(), 0);
+        }
+        const auto colorAt = [&](const QString& text) {
+            QTextCursor cursor(&document);
+            cursor.setPosition(expected.indexOf(text));
+            cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+            return cursor.charFormat().foreground().color();
+        };
+        EXPECT_EQ(colorAt(QStringLiteral("first")), colorAt(QStringLiteral("second")));
+        EXPECT_EQ(colorAt(QStringLiteral("first")), colorAt(QStringLiteral("last")));
+    }
+}
+
+TEST_F(CodeBlockTest, Contract_InternalScrollSurfaceStaysTransparentAcrossThemes)
+{
+    CodeBlock block(QStringLiteral("int value = 1;\n\n// short source"));
+    block.setLanguage(QStringLiteral("cpp"));
+    block.resize(500, 240);
+    block.show();
+    auto* scroll = block.findChild<ScrollView*>(QStringLiteral("fluentCodeBlockScroll"));
+    ASSERT_NE(scroll, nullptr);
+    for (const auto theme : {fluent::FluentElement::Dark, fluent::FluentElement::Light, fluent::FluentElement::Dark}) {
+        fluent::FluentElement::setTheme(theme);
+        QApplication::processEvents();
+        EXPECT_FALSE(scroll->viewport()->autoFillBackground());
+        const QImage frame = block.grab().toImage();
+        const qreal dpr = frame.devicePixelRatio();
+        const QPoint inside = scroll->viewport()->mapTo(&block, QPoint(scroll->viewport()->width() - 12, 5));
+        const QPoint outside = inside + QPoint(0, -10);
+        EXPECT_EQ(frame.pixelColor(inside * dpr), frame.pixelColor(outside * dpr))
+            << "The code viewport must share the surrounding CodeBlock surface";
+    }
+}
+
+TEST_F(CodeBlockTest, Contract_ClippedCodeRenderingMatchesLabelSelectionAndWrapping)
+{
+    CodeBlock block(QStringLiteral("    // 项目名称\nvalue = \"a long quoted value\";\n\n").repeated(20));
+    block.setLanguage(QStringLiteral("cpp"));
+    block.setMaxVisibleLines(0);
+    block.resize(380, block.sizeHint().height());
+    block.show();
+    QApplication::processEvents();
+    auto* text = block.findChild<Label*>(QStringLiteral("fluentCodeBlockText"));
+    ASSERT_NE(text, nullptr);
+    Label reference;
+    reference.setFont(text->font());
+    reference.setTextFormat(Qt::RichText);
+    reference.setTextInteractionFlags(text->textInteractionFlags());
+    reference.setAlignment(text->alignment());
+    reference.setWordWrap(true);
+    reference.setTextColorRole(Label::TextColorRole::Primary);
+    reference.setAutoFillBackground(false);
+    const auto render = [](Label* label) {
+        QImage frame(QSize(label->width(), 120), QImage::Format_ARGB32_Premultiplied);
+        frame.fill(Qt::transparent);
+        QPainter painter(&frame);
+        label->render(&painter, QPoint(), QRect(QPoint(), frame.size()), QWidget::DrawChildren);
+        return frame;
+    };
+    for (const auto theme : {fluent::FluentElement::Light, fluent::FluentElement::Dark}) {
+        fluent::FluentElement::setTheme(theme);
+        QApplication::processEvents();
+        reference.setText(text->text());
+        for (int width : {260, 340}) {
+            text->resize(width, text->heightForWidth(width));
+            reference.resize(width, reference.heightForWidth(width));
+            EXPECT_EQ(text->heightForWidth(width), reference.heightForWidth(width));
+            for (int selected : {0, 35}) {
+                text->setSelection(4, selected);
+                reference.setSelection(4, selected);
+                EXPECT_EQ(render(text), render(&reference))
+                    << "Clipped drawing must align with Label's native hit testing and selection";
+            }
+        }
+        text->setWordWrap(false);
+        reference.setWordWrap(false);
+        EXPECT_EQ(text->sizeHint(), reference.sizeHint());
+        text->setWordWrap(true);
+        reference.setWordWrap(true);
+    }
+}
+
+TEST_F(CodeBlockTest, Contract_LongLineRenderingIsStableAcrossFocusAndSelection)
+{
+    CodeBlock block;
+    block.setCode(QString(140, QLatin1Char('a')) + "\n// second line\n// third line");
+    block.setLanguage("cpp");
+    block.resize(360, 260);
+    block.show();
+    QApplication::processEvents();
+    auto* label = block.findChild<QLabel*>("fluentCodeBlockText");
+    ASSERT_TRUE(label);
+    block.headerButton()->setFocus();
+    QApplication::processEvents();
+    const auto before = label->grab().toImage();
+    label->setFocus();
+    QApplication::processEvents();
+    EXPECT_EQ(before, label->grab().toImage());
+    label->setSelection(0, 8);
+    EXPECT_NE(before, label->grab().toImage());
+    label->setSelection(0, 0);
+    EXPECT_EQ(before, label->grab().toImage());
+}

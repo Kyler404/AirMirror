@@ -1,0 +1,414 @@
+# WebAssembly Workflow
+
+> **Status:** Current guide
+
+<!-- docs-nav:top:start -->
+[Documentation](../README.md) › [Development](README.md) › Build, tests, and diagnostics
+
+[← Linux Workflow](linux-workflow.md) · [Contents](../SUMMARY.md) · [Development index](README.md)
+<!-- docs-nav:top:end -->
+
+Use this workflow to build FluentQt or the C++ Gallery for a browser, run the
+local Chromium smoke, or change the Pages deployment. The supported browser
+baseline is Qt 6.9.3 `wasm_singlethread` with Emscripten 3.1.70. Qt 5.15 and
+Qt 6.2 remain supported desktop baselines; they are not browser targets.
+
+Progress and verification evidence are tracked in the
+[WebAssembly Roadmap](webassembly-roadmap.md).
+
+## Toolchain
+
+Install both parts of the browser toolchain:
+
+- the Qt 6.9.3 desktop kit for the current host;
+- Qt 6.9.3 `wasm_singlethread`;
+- Emscripten 3.1.70 from the official `emsdk` repository;
+- Ninja and CMake 3.25 or newer for the public preset.
+
+Activate Emscripten and point the preset at the Qt target and host kits. These
+example paths match a default macOS Qt installation; adjust them for the host:
+
+```bash
+source "$HOME/Qt/Tools/emsdk/emsdk_env.sh"
+export QT_WASM_ROOT="$HOME/Qt/6.9.3/wasm_singlethread"
+export QT_HOST_ROOT="$HOME/Qt/6.9.3/macos"
+export FLUENT_QT_WASM_SOURCE_CACHE="$PWD/build/qt-wasm-source-cache"
+```
+
+Confirm that `em++ --version` reports 3.1.70 before configuring. Qt minor
+versions and Emscripten versions are coupled; do not silently substitute a
+different SDK version.
+
+The Qt 6.9.3 browser adapter uses two small, pinned Qt accessibility patches.
+Fetch their exact upstream sources explicitly before configuration:
+
+```bash
+python3 tools/wasm/qt_accessibility_overlay.py fetch \
+  --cache "$FLUENT_QT_WASM_SOURCE_CACHE"
+```
+
+The manifest under `src/compatibility/private/wasm/qt-6.9.3/` owns source
+revision, hashes, licenses and SDK identity. `fetch --offline` verifies an
+existing cache and fails on missing or mismatched files. CMake reads only that
+cache, builds the two replacement objects in a separate adapter build, and
+keeps the Qt SDK unchanged. Native builds do not load this helper or require
+Python or Qt private headers. Keep the same cache available for the installed
+WebAssembly consumer below.
+
+## Configure and build
+
+The `wasm` preset builds the reusable library, Hello World, and the C++ Gallery
+without vcpkg, desktop packaging, tests, or PySide6. It explicitly enables the
+optional `FLUENT_QT_BUILD_WEBASSEMBLY_SUPPORT` integration layer; ordinary
+native builds leave that layer disabled:
+
+```bash
+cmake --preset wasm
+python3 tools/dev/fluent_qt_build.py --preset wasm
+```
+
+The main browser entry points are:
+
+- `build/wasm/app/index.html` for the C++ Web Gallery;
+- `build/wasm/examples/hello_world/hello-world/index.html` for the standalone
+  minimal example with the shared browser shell;
+- `build/wasm/app/hello-world/index.html` for the minimal UILib app exactly as
+  it is staged beside the Gallery for Pages;
+- `build/wasm/app/hello-world-spatial/index.html` for the minimal Spatial app,
+  built from the same C++ window as the native Spatial executable; its
+  standalone entry is
+  `build/wasm/examples/hello_world/hello-world-spatial/index.html`;
+- `build/wasm/app/plugin-extension/index.html` for the optional plugin lifecycle
+  app; its standalone build entry is
+  `build/wasm/examples/plugin_extension/index.html`.
+
+The [Hello World guide](../../examples/hello_world/README.md) maps the native,
+Python, and browser Spatial examples. The
+[plugin example guide](../architecture/plugins.md#minimal-extension-example)
+maps the corresponding Plugins entries.
+
+Serve the build directory over HTTP. Browsers must not load the generated files
+directly through `file://`:
+
+```bash
+python3 -m http.server 4173 --bind 127.0.0.1 --directory build/wasm
+```
+
+Then open `http://127.0.0.1:4173/app/index.html`.
+
+### High-density rendering
+
+Qt WebAssembly sizes the QWidget backing store from the browser device pixel
+ratio. The Gallery uses native resolution by default in both 2D and 3D, including
+2x Retina displays. Enabling 3D does not lower the canvas resolution.
+
+Lower-resolution rendering remains an explicit performance option. It reduces
+pixel work but makes text softer on high-density displays. The adaptive option
+selects 1x–1.25x in 0.05 steps, targeting at most 1.6 million viewport pixels;
+it preserves the logical layout.
+
+- use the footer link to opt into lower resolution and return to native;
+- append `?render-scale=native` to explicitly select the default quality;
+- append `?render-scale=adaptive` for the bounded performance profile;
+- append `?render-scale=1` or another positive value for an explicit profile;
+- the selected/native values, profile, and pixel budget are exposed as
+  `data-fluent-qt-render-dpr`, `data-fluent-qt-native-dpr`,
+  `data-fluent-qt-render-profile`, and `data-fluent-qt-pixel-budget` for browser
+  automation.
+
+This is a browser-shell policy and does not add WebAssembly branches or scale
+assumptions to `FluentQt` C++ code.
+
+### Threading policy
+
+The supported build remains `wasm_singlethread`. Selecting Qt's
+`wasm_multithread` kit does not automatically parallelize QWidget layout,
+painting, input delivery, or canvas presentation; those GUI operations remain
+on the browser main thread. A threaded build is useful only after a consumer
+extracts measurable non-GUI work into worker-backed threads.
+
+Treat multithreading as a separate future experiment rather than a replacement
+for the supported artifact. It requires a matching Qt multithread kit,
+`SharedArrayBuffer`, a secure context, and COOP/COEP response headers, and it
+must be published as a separate binary with runtime selection because the same
+WebAssembly binary cannot fall back to the single-thread configuration. Profile
+an extracted worker workload before adding this deployment and compatibility
+cost to M3.
+
+### Window presentation
+
+Desktop-sized browser viewports default to a centered Fluent app window with
+rounded clipping, shadow, caption buttons, and client-side move/resize.
+Compact viewports maximize the same application window inside one browser-sized
+Qt desktop surface.
+Use the footer switch or append one of these query values:
+
+- `?window-mode=windowed` forces the centered app-window presentation;
+- `?window-mode=maximized` fills the available browser stage.
+
+The requested mode is exposed as `data-fluent-qt-window-mode`. The effective
+application-window geometry is exposed as
+`data-fluent-qt-window-x`, `data-fluent-qt-window-y`,
+`data-fluent-qt-window-width`, `data-fluent-qt-window-height`, and
+`data-fluent-qt-window-maximized` for browser automation. The HTML shell owns
+only the browser stage and presentation request. `FluentQt::WebAssembly` owns
+the single Qt desktop surface plus hosted QWidget geometry, move/resize, and
+maximize/restore behavior; `GalleryWindow` remains the actual visible window.
+
+### Embedded theme protocol
+
+The website and an embedded Gallery share the same three-value theme wire
+format: `light`, `dark`, and `high-contrast`. The initial value is passed as
+`?embed=site&host-theme=<value>`. Later changes use a same-origin message:
+
+```js
+galleryFrame.contentWindow.postMessage({
+  source: "fluent-qt-site",
+  type: "theme",
+  theme: "high-contrast"
+}, window.location.origin);
+```
+
+Existing `light` and `dark` hosts remain compatible. Browser
+`(forced-colors: active)` always takes precedence without overwriting the
+stored host preference; when forced colors ends, the most recent host or system
+preference is restored. The website theme button also cycles through all three
+values, so an embedded Gallery can enter high contrast without relying on an OS
+setting.
+
+### Embedded Spatial sample
+
+`?showcase=spatial` starts the existing `spatial-view-scene` sample without the
+Gallery navigation, startup pages, or saved preferences. Its C++ host lives in
+`app/platform/wasm/GallerySpatialShowcase.cpp`; the sample and component code are
+unchanged. It includes scene controls and is separate from the minimal
+`app/hello-world-spatial/index.html` application. `embed=site` retains the host
+theme contract. The website loads this
+view on demand at native render density and can send same-origin
+`showcase-visibility` (boolean `active`) and `showcase-motion` (boolean `reduced`)
+messages. Hiding the sample lets SpatialView release its GPU viewport; unloading
+the iframe releases the browser runtime. An optional `host-session` query is
+echoed in lifecycle messages so discarded loads cannot overwrite a new session.
+
+The browser smoke operates the real camera Slider and 2D/3D switch, checks theme
+and reduced-motion transitions, and saves Light/Dark evidence. The host publishes
+`data-fluent-qt-showcase-*` values from component signals for verification; those
+attributes do not drive the UI. Software-rendered CI evidence is not hardware
+GPU performance approval.
+
+### Simplified Chinese font fallback
+
+WebAssembly builds embed
+`res/fonts/FluentQtUISimplifiedChinese-Regular.otf`, a GB2312 subset generated
+from the pinned Noto Sans SC source. CMake includes it only when
+`FLUENT_QT_BUILD_WEBASSEMBLY_SUPPORT` is enabled under Emscripten, so native
+binaries do not inherit its approximately 1.9 MiB payload.
+
+Regenerate or verify that asset with pinned fontTools 4.59.1:
+
+```bash
+python tools/fonts/generate_typography_assets.py --web-fallback
+python tools/fonts/generate_typography_assets.py --check-web-fallback
+```
+
+Resource initialization registers the optional family as a Han fallback. The
+CalendarView smoke checks both registration and the `月` / `周` glyphs; reusable
+components contain no WebAssembly-specific font branches.
+
+## Browser smoke
+
+The Gallery owns condition-driven browser checks selected by a query parameter:
+
+- `?wasm-smoke=fast` visits four representative routes;
+- `?wasm-smoke=full` traverses the complete route catalog;
+- both tiers verify WebLocalStorage, asynchronous dialog/menu completion, a
+  bounded secondary Fluent window, a three-action menu, the seven-action
+  PasswordBox editing menu, physical browser-key delivery into a real Fluent
+  LineEdit, opaque active client chrome, the painted-surface cache, and the
+  selected render profile;
+- both tiers verify the embedded `light` / `dark` / `high-contrast` query and
+  message contract, forced-colors precedence and restoration, and the website
+  theme cycle/persistence behavior;
+- browser smoke records WebAssembly heap capacity and program-break watermarks;
+- both tiers verify the Simplified Chinese fallback, launch the staged base and
+  Spatial minimal apps, and click the Spatial Button at its projected position;
+- both tiers operate the plugin example through activation, creation,
+  deactivation, and restoration, checking retained widgets and native
+  dependency/failure probes.
+
+The runner publishes `data-fluent-qt-smoke="pass|fail"` and a detail field on
+the document root. CI drives that contract through Playwright:
+
+```bash
+python -m pip install "playwright==1.58.0"
+python -m playwright install chromium
+python .github/scripts/run-wasm-browser-smoke.py \
+  --root build/wasm \
+  --mode fast
+```
+
+The smoke runner defaults to a simulated DPR 2 so CI covers the Retina profile.
+Use `--render-scale adaptive` for a controlled quality/performance comparison.
+Use `--viewport-width 1920 --viewport-height 1080` to exercise the large-screen
+adaptive profile.
+
+Use `--mode full` before changing route construction, settings persistence,
+dialogs, menus, the Web shell, or Pages packaging. The existing full command
+palette/overlay contract also recreates the Drawer five times. Each opening
+requires one correctly typed proxy for Modal, DimEnabled, CloseOutside, Blur,
+Dim and Close; closure must retire every Drawer proxy, including hidden and
+construction-time nodes, before the next opening. It waits for that lifecycle
+condition without a fixed delay or selecting the first duplicate. Results and
+snapshots are under `command-palette-validation/drawer-lifecycle/`.
+
+### Spatial WebGL validation
+
+With `FLUENT_QT_BUILD_SPATIAL=ON` (included in the `wasm` preset), the Gallery's
+**Settings → 3D Gallery** switch uses the same native compositor through WebGL.
+The browser canvas owns the context. Initialization checks the real viewport;
+reparenting into the browser desktop can replace that context and is revalidated.
+Initialization failure selects the usable 2D layout and updates the support badge.
+
+Run the optional rendering and performance probe separately from the route smoke:
+
+```bash
+python3 .github/scripts/run-wasm-spatial-smoke.py \
+  --root build/wasm --headed --channel chrome \
+  --output build/spatial-validation/web
+```
+
+`?wasm-smoke=spatial` measures three seconds of pointer following and an idle
+interval, then clicks the projected switch and returns through 2D → 3D. It also
+opens a Spatial example and changes its camera-distance control. It writes
+frame-swap counts and timings to
+`data-fluent-qt-spatial-metrics`; the runner also records the browser's GPU device
+and saves a screenshot. Normal visits create no measurement timer.
+Frame swaps count renderer submissions, not monitor scanout. Keep the browser
+foreground and distinguish hardware WebGL from SwiftShader when reporting
+performance; a headless pass alone does not establish GPU performance.
+
+Add `--quality` to capture the same Popup page in 2D, at the flat GPU endpoint,
+in 3D, and after returning to 2D. This checks projected text edge contrast against
+the 2D reference and saves full-page and control-detail images for visual review.
+Use `--render-scale adaptive` to repeat that check for the optional lower-resolution
+profile. Interaction smoke and frame counts alone do not establish text clarity.
+
+To check the 2D fallback with Chromium's software renderer:
+
+```bash
+python3 .github/scripts/run-wasm-spatial-smoke.py \
+  --root build/wasm --software-gl \
+  --output build/spatial-validation/web-fallback
+```
+
+This check requires the Gallery to reject SwiftShader and remain usable in 2D.
+
+## Adapter boundary
+
+WebAssembly follows the same opt-in shape as the PySide6 bindings. The root
+option adds `platforms/webassembly/`, which owns the exported browser runtime
+and Asyncify helper; the Emscripten toolchain is still the actual platform
+selection boundary.
+
+Reusable C++ code stays platform-neutral:
+
+- `src/` has no WebAssembly platform enum, Emscripten include, or `Q_OS_WASM`
+  branch;
+- Gallery views and view-models depend on `app/platform/GalleryPlatform.h`
+  capabilities rather than browser macros;
+- CMake selects exactly one desktop or browser implementation for application
+  lifetime, settings storage, theme persistence, and distribution UI;
+- Hello World uses the same selected-launcher pattern, so its shared window
+  construction is identical on native and browser targets.
+
+Browser-only C++ is confined to `platforms/webassembly/`,
+`app/platform/wasm/`, and `examples/hello_world/platform/wasm/`. Pinned Qt
+accessibility source manifests and patches live in the private compatibility
+owner `src/compatibility/private/wasm/`; fetched sources remain in the external
+cache, rather than components. Build-system
+and deployment policy stay in the WebAssembly CMake/CI modules.
+
+## Consumer contract
+
+`FluentQt::FluentQt` does not propagate Emscripten-specific flags. A windowed
+browser consumer enables the adapter and links the runtime explicitly:
+
+```cmake
+set(FLUENT_QT_BUILD_WEBASSEMBLY_SUPPORT ON CACHE BOOL "" FORCE)
+add_subdirectory(path/to/FluentQt)
+target_link_libraries(my_web_app PRIVATE
+    FluentQt::FluentQt
+    FluentQt::WebAssembly)
+```
+
+Call `fluent::webassembly::configureRuntime()` before constructing Fluent
+widgets, then present each application window with
+`fluent::webassembly::showWindow()`. This keeps browser mechanics outside the
+shared component and application code.
+
+`FluentQt::WasmAsyncify` exists separately when the optional adapter is enabled
+with an Emscripten toolchain. Link it only when an application retains nested
+modal event loops; the Gallery and Hello World do not. Native builds define
+neither browser target. Asyncify increases output size and runtime overhead.
+
+Use `qt_add_executable()` for a WebAssembly executable. Objects that must live
+for the browser session cannot be stack-owned by a `main()` that returns to the
+JavaScript event loop. The selected browser launch adapters keep `QApplication`
+and the top-level window alive on the heap without leaking platform branches
+into the shared examples or Gallery code.
+
+The `wasm` preset also enables installation so CI can verify a consumer against
+the exported package rather than the source tree:
+
+```bash
+cmake --install build/wasm \
+  --prefix /tmp/fluentqt-wasm-install \
+  --component Development
+"$QT_WASM_ROOT/bin/qt-cmake" \
+  -S examples/hello_world \
+  -B build/wasm-installed-consumer \
+  -G Ninja \
+  -DFluentQt_DIR=/tmp/fluentqt-wasm-install/lib/cmake/FluentQt
+python3 tools/dev/fluent_qt_build.py build/wasm-installed-consumer
+```
+
+This is the independent UILib proof: the Gallery is one consumer, not the only
+WebAssembly output.
+
+## Gallery platform boundaries
+
+The browser Gallery intentionally excludes desktop-only behavior:
+
+- single-instance `QLocalServer` IPC and second-launch activation;
+- system tray integration and close-to-tray prompts;
+- native window placement persistence and desktop packaging;
+- update polling and filesystem theme import/export;
+- OS-native caption buttons, native system move/resize, and compositor-specific
+  backdrops.
+
+Browser settings use `QSettings::WebLocalStorageFormat`, logs go to the browser
+console, and pages are created lazily. The hosted Fluent title bar uses an
+opaque active token surface, while the otherwise static software window
+material is cached until size, theme, effect, activation, or display scale
+changes. The hosted Fluent window still provides caption buttons and manual
+move/resize inside the browser desktop. Gallery dialogs and menus are
+asynchronous, so the Gallery itself does not link whole-program Asyncify.
+
+## CI and Pages
+
+`.github/workflows/ci-wasm.yml` is the reusable browser validation module. The
+top-level CI selects it for browser-affecting pull requests and for full `main`
+validation. On `main`, that same run passes the staged payload to the reusable
+Pages deployment, so the Gallery is built once. A manual Pages run rebuilds the
+full tier before deploying and remains the recovery path. The site is published
+below `/Fluent-Qt/gallery/` together with `build-info.json` and license material.
+
+The open-source WebAssembly binary statically links Qt and is distributed under
+GPLv3. FluentQt's own source remains MIT licensed. The deployed payload must
+retain the FluentQt, Qt, Emscripten, and bundled-asset notices plus the exact Qt
+corresponding-source link; see `THIRD_PARTY_NOTICES.md`.
+
+<!-- docs-nav:bottom:start -->
+---
+[← Linux Workflow](linux-workflow.md) · [Contents](../SUMMARY.md) · [Development index](README.md)
+<!-- docs-nav:bottom:end -->

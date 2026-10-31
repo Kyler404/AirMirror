@@ -1,0 +1,998 @@
+const translations = {
+  "zh": {
+    "meta.title": "FluentQt (Fluent-Qt) — Qt Widgets 的 Fluent UI 控件库",
+    "meta.description": "FluentQt（Fluent-Qt）是面向 Qt Widgets 的 C++17 Fluent UI 控件库，支持 Qt 5/6、可选 PySide6 绑定和 WebAssembly。在线体验 Gallery，查看 API 与接入示例。",
+    "a11y.skip": "跳到主要内容",
+    "a11y.primaryNav": "主导航",
+    "a11y.home": "Fluent-Qt 首页",
+    "a11y.openGallery": "打开 C++ Web Gallery",
+    "a11y.previewGallery": "查看 Gallery 原尺寸截图",
+    "a11y.openMenu": "打开导航",
+    "a11y.closeMenu": "关闭导航",
+    "a11y.language": "语言",
+    "a11y.useDarkTheme": "切换到深色主题",
+    "a11y.useHighContrastTheme": "切换到高对比度主题",
+    "a11y.useLightTheme": "切换到浅色主题",
+    "a11y.systemHighContrastTheme": "系统高对比度主题已启用",
+    "a11y.specs": "项目规格",
+    "a11y.downloads": "平台下载",
+    "a11y.componentModules": "组件模块",
+    "a11y.relatedControls": "相关控件",
+    "a11y.aiBuildCapabilities": "Skill 能力",
+    "a11y.heroTech": "C++17、Qt 5.15 或 Qt 6.2 及以上、MIT",
+    "nav.why": "概览",
+    "nav.components": "控件",
+    "nav.quickStart": "接入",
+    "nav.gallery": "Gallery",
+    "nav.api": "文档",
+    "nav.community": "Q&A",
+    "nav.aiBuild": "GUI Skill",
+    "nav.downloads": "下载",
+    "hero.tagline": "Qt Widgets 的 Fluent UI 组件库",
+    "hero.detail": "提供基础输入、导航与数据展示等组件，内置主题切换与流畅动画，构建跨平台桌面应用。",
+    "hero.tryGallery": "在线打开 Gallery",
+    "hero.download": "下载 Gallery",
+    "hero.quickStart": "查看接入说明",
+    "hero.pythonLabel": "Python / PySide6",
+    "hero.pythonCopy": "Python 项目可通过 PySide6 使用同一套控件",
+    "hero.pythonGallery": "Gallery",
+    "hero.previewTitle": "Gallery 原图",
+    "hero.previewHelp": "1440 × 900 原始像素；窄窗口可滚动查看，按 Esc 关闭。",
+    "hero.previewRegion": "原尺寸 Gallery 截图",
+    "hero.closePreview": "关闭",
+    "spatial.kicker": "05 / SPATIAL · 可选 3D 扩展",
+    "spatial.title": "Spatial 3D 扩展",
+    "spatial.copy": "把现有 QWidget 组合放进 SpatialView，为卡片加入透视、旋转与景深。普通 2D 应用无需启用。",
+    "spatial.widgetsTitle": "控件不必重写",
+    "spatial.widgetsCopy": "保留原有布局、signals / slots 和模型；SpatialItem 管理整组控件的姿态。",
+    "spatial.renderTitle": "空间合成，按需刷新",
+    "spatial.renderCopy": "桌面使用 OpenGL，WebAssembly 使用 WebGL；内容不变时复用纹理。",
+    "spatial.optionalTitle": "按需启用，保留 2D",
+    "spatial.optionalCopy": "C++ 链接 FluentQt::Spatial，Python 通过可选绑定使用。Gallery 在加速不可用时回退到 2D。",
+    "spatial.guide": "查看 Spatial 接入指南 ↗",
+    "spatial.try": "在 Gallery 中体验 →",
+    "spatial.how": "Gallery：Settings → 3D Gallery，再打开 Plugins → Spatial。",
+    "spatial.stop": "停止并释放",
+    "spatial.open": "独立打开 ↗",
+    "spatial.frameTitle": "真实 C++ Spatial 交互示例",
+    "spatial.runTitle": "正在加载示例…",
+    "spatial.runCopy": "",
+    "spatial.run": "运行 C++ 3D 示例",
+    "spatial.caption": "真实 Qt Widgets / WebGL · 拖动滑块调整镜头，在场景内移动鼠标查看景深。",
+    "spec.runtime": "UI 运行时",
+    "spec.qt": "Qt 支持",
+    "spec.toolchain": "工具链",
+    "spec.platforms": "运行平台",
+    "path.kicker": "01 / 开始使用",
+    "path.title": "开始使用",
+    "path.copy": "先打开在线 Gallery 查看控件效果，或直接查看 C++ / Python 接入说明。",
+    "path.tryTitle": "在线 Gallery",
+    "path.tryCopy": "搜索控件、切换主题，直接操作 C++ WebAssembly 示例。",
+    "path.tryAction": "打开 Gallery",
+    "path.cppTitle": "C++ / Qt Widgets",
+    "path.cppCopy": "复制 CMake 配置，按最小示例接入现有 Qt Widgets 项目。",
+    "path.cppAction": "查看 C++ 接入",
+    "path.pythonTitle": "Python / PySide6",
+    "path.pythonCopy": "从 PyPI 安装 FluentQt，通过 PySide6 使用同一套控件。",
+    "path.pythonAction": "查看 PyPI 安装",
+    "positioning.titleLine1": "原生控件",
+    "positioning.titleLine2": "C++ 接口",
+    "positioning.copy": "每个控件都有独立的 C++ API、状态与布局行为",
+    "positioning.libraryTitle": "Qt Widgets 原生用法",
+    "positioning.libraryCopy": "沿用 signals、slots、layout 与事件循环",
+    "positioning.galleryTitle": "Qt 5 / Qt 6 共用接口",
+    "positioning.galleryCopy": "应用侧无需为 Qt 主版本维护两套调用",
+    "positioning.shipTitle": "CMake 接入",
+    "positioning.shipCopy": "包含 FluentQt/FluentQt.h，链接 FluentQt::FluentQt",
+    "components.title": "控件目录",
+    "components.copy": "以下为 Gallery 中的部分控件",
+    "components.buttonCopy": "包含默认、强调、禁用和图标状态",
+    "components.familiesLabel": "查看完整 API 目录",
+    "quickStart.title": "快速接入",
+    "quickStart.copy": "将片段放在 add_executable(my_app ...) 之后。新建工程可参考完整的 hello_world 示例。",
+    "quickStart.keepProject": "保留现有 Widgets 工程与事件循环",
+    "quickStart.libraryOnly": "库目标只依赖 Qt Widgets",
+    "quickStart.sameApi": "Qt 5 / Qt 6 使用同一应用层接口",
+    "quickStart.example": "查看完整 hello_world",
+    "quickStart.python": "Python / PySide6 · pip install FluentQt",
+    "quickStart.help": "提问与获取帮助",
+    "copy.copy": "复制",
+    "copy.copied": "已复制",
+    "copy.announcement": "代码已复制到剪贴板",
+    "copy.failed": "复制失败，请手动选择代码",
+    "gallery.title": "控件示例",
+    "gallery.copy": "这个 Gallery 在浏览器中运行，无需本地配置 Qt；接入项目仍需 Qt 5.15+ 或 6.2+。",
+    "gallery.searchTitle": "搜索",
+    "gallery.searchCopy": "按控件名定位页面",
+    "gallery.stateTitle": "验证",
+    "gallery.stateCopy": "切换浅色、深色、高对比度主题与动效级别",
+    "gallery.codeTitle": "查看示例",
+    "gallery.codeCopy": "切换查看 C++ / Python 代码",
+    "gallery.webAction": "启动实时 Gallery",
+    "gallery.liveStateWaiting": "待加载",
+    "gallery.liveStateLoading": "正在启动",
+    "gallery.liveStateReady": "可以操作",
+    "gallery.liveStateSlow": "仍在加载",
+    "gallery.liveStateError": "启动失败",
+    "gallery.loadNow": "立即加载",
+    "gallery.fullPage": "完整页面",
+    "gallery.waitingTitle": "正在加载 Gallery…",
+    "gallery.waitingDetail": "",
+    "gallery.loadingTitle": "正在加载…",
+    "gallery.loadingDetail": "",
+    "gallery.slowTitle": "仍在加载…",
+    "gallery.slowDetail": "",
+    "gallery.readyTitle": "Gallery",
+    "gallery.readyDetail": "",
+    "gallery.errorTitle": "加载失败",
+    "gallery.errorDetail": "请检查网络后重试。",
+    "gallery.loadAction": "启动实时体验",
+    "gallery.retryAction": "重试",
+    "gallery.openAction": "在新页面打开",
+    "gallery.frameTitle": "Fluent-Qt Gallery",
+    "gallery.noscript": "启用 JavaScript 后即可在此体验 Gallery。",
+    "aiBuild.title": "AI 辅助开发",
+    "aiBuild.structureTitle": "工程",
+    "aiBuild.structureCopy": "C++ / PySide6 项目结构",
+    "aiBuild.designTitle": "界面",
+    "aiBuild.designCopy": "Fluent 组件、主题与配色",
+    "aiBuild.previewTitle": "快速预览",
+    "aiBuild.previewCopy": "先在 Live Scene 里边改边看，再用 C++ 示例确认效果",
+    "aiBuild.reviewTitle": "检查",
+    "aiBuild.reviewCopy": "Light / Dark、窄窗口与交互",
+    "aiBuild.skillAction": "查看 Skill",
+    "aiBuild.guideAction": "文档",
+    "aiBuild.previewAction": "查看用法",
+    "aiBuild.caseEyebrow": "参考实现",
+    "aiBuild.caseCopy": "任务分组、运行时间线、输入与 Light / Dark 主题。",
+    "aiBuild.disclaimer": "FluentQt 独立实现，非 DeepSeek 官方应用。",
+    "aiBuild.upstreamAction": "上游项目",
+    "downloads.title": "下载 Gallery",
+    "downloads.copy": "桌面安装包用于离线体验；应用接入仍使用 CMake 或 PyPI。",
+    "downloads.recommended": "为当前设备推荐",
+    "downloads.latest": "最新 Release",
+    "downloads.all": "全部版本与校验文件",
+    "downloads.pythonEyebrow": "可选兼容",
+    "downloads.pythonGallery": "Python Gallery",
+    "footer.project": "项目",
+    "footer.docs": "文档",
+    "footer.readme": "README",
+    "footer.license": "项目 MIT 许可证",
+    "footer.notices": "第三方声明",
+    "images.hero": "Windows 下开启 3D 与 Mica 的 Fluent-Qt Gallery Home 实际截图，展示控件分类和示例",
+    "images.button": "Windows Mica 效果下的 Fluent-Qt Gallery Button 控件页面",
+    "images.toggle": "Fluent-Qt Gallery 中完整的 ToggleSwitch 控件页面",
+    "images.slider": "Fluent-Qt Gallery 中完整的 Slider 控件页面",
+    "images.collections": "Windows Mica 效果下的 Fluent-Qt Gallery 集合视图页面",
+    "images.system": "Windows Mica 效果下的 Fluent-Qt Gallery 导航与窗口界面",
+    "images.webGallery": "C++ Web Gallery 加载前预览",
+    "images.deepseekDesktop": "使用 build-fluentqt-gui 构建的 DeepSeek Desktop 原生桌面参考界面",
+    "images.settings": "Fluent-Qt Gallery 设置页面，完整展示主题、风格和窗口选项",
+    "motion.label": "粒子动效",
+    "qml.kicker": "06 / QMLBRIDGE",
+    "qml.title": "QML 兼容",
+    "qml.copy": "QmlBridge 是 FluentQt 的 QML 兼容插件，可在 Widgets 界面中加载 QML 页面，共用业务数据和 Fluent 主题。",
+    "qml.guide": "接入指南",
+    "qml.example": "完整示例",
+    "qml.how": "Gallery：Plugins → QmlBridge → QmlView。",
+    "qml.cppLabel": "C++ 片段",
+    "qml.caption": "Widgets 输入框与 QML 文本绑定示例。",
+    "spatial.reload": "重新加载",
+    "spatial.stopped": "示例已停止"
+  },
+  "en": {
+    "meta.title": "FluentQt (Fluent-Qt) — Fluent UI library for Qt Widgets",
+    "meta.description": "FluentQt (Fluent-Qt) is a C++17 Fluent UI library for Qt Widgets, with Qt 5/6, optional PySide6 bindings, and WebAssembly. Try the Gallery and setup examples.",
+    "a11y.skip": "Skip to main content",
+    "a11y.primaryNav": "Primary navigation",
+    "a11y.home": "Fluent-Qt home",
+    "a11y.openGallery": "Open the C++ Web Gallery",
+    "a11y.previewGallery": "View the Gallery screenshot at full size",
+    "a11y.openMenu": "Open navigation",
+    "a11y.closeMenu": "Close navigation",
+    "a11y.language": "Language",
+    "a11y.useDarkTheme": "Switch to dark theme",
+    "a11y.useHighContrastTheme": "Switch to high contrast theme",
+    "a11y.useLightTheme": "Switch to light theme",
+    "a11y.systemHighContrastTheme": "System high contrast theme is active",
+    "a11y.specs": "Project specifications",
+    "a11y.downloads": "Platform downloads",
+    "a11y.componentModules": "Component modules",
+    "a11y.relatedControls": "Related controls",
+    "a11y.aiBuildCapabilities": "Skill capabilities",
+    "a11y.heroTech": "C++17, Qt 5.15 or Qt 6.2 and above, MIT",
+    "nav.why": "Overview",
+    "nav.components": "Controls",
+    "nav.quickStart": "Quick start",
+    "nav.gallery": "Gallery",
+    "nav.api": "Documentation",
+    "nav.community": "Q&A",
+    "nav.aiBuild": "GUI Skill",
+    "nav.downloads": "Download",
+    "hero.tagline": "A Fluent UI component library for Qt Widgets",
+    "hero.detail": "Build cross-platform desktop apps with input, navigation and data display components, built-in theming and smooth animations.",
+    "hero.tryGallery": "Open the online Gallery",
+    "hero.download": "Download Gallery",
+    "hero.quickStart": "Setup guide",
+    "hero.pythonLabel": "Python / PySide6",
+    "hero.pythonCopy": "Use the same controls from Python through PySide6",
+    "hero.pythonGallery": "Gallery",
+    "hero.previewTitle": "Gallery Home · Full-size capture",
+    "hero.previewHelp": "Original 1440 × 900 pixels. Scroll in smaller windows; press Esc to close.",
+    "hero.previewRegion": "Full-size Gallery capture",
+    "hero.closePreview": "Close",
+    "spatial.kicker": "05 / SPATIAL · OPTIONAL 3D EXTENSION",
+    "spatial.title": "Familiar widgets. A new dimension.",
+    "spatial.copy": "Place an existing QWidget composition in SpatialView to add perspective, rotation, and depth. Ordinary 2D apps do not need to enable it.",
+    "spatial.widgetsTitle": "Keep your widgets",
+    "spatial.widgetsCopy": "Keep layouts, signals, slots, and models. SpatialItem controls the pose of the whole widget composition.",
+    "spatial.renderTitle": "Compose in depth. Refresh on demand.",
+    "spatial.renderCopy": "OpenGL on desktop, WebGL in WebAssembly. Unchanged content reuses its textures.",
+    "spatial.optionalTitle": "Opt in. Keep the 2D path.",
+    "spatial.optionalCopy": "Link FluentQt::Spatial in C++, or use the optional Python binding. Gallery falls back to 2D when acceleration is unavailable.",
+    "spatial.guide": "Read the Spatial integration guide ↗",
+    "spatial.try": "Try it in Gallery →",
+    "spatial.how": "Gallery: Settings → 3D Gallery, then Plugins → Spatial.",
+    "spatial.stop": "Stop and release",
+    "spatial.open": "Open separately ↗",
+    "spatial.frameTitle": "Live C++ Spatial interactive sample",
+    "spatial.runTitle": "Loading example…",
+    "spatial.runCopy": "",
+    "spatial.run": "Run the C++ 3D sample",
+    "spatial.caption": "Real Qt Widgets / WebGL. Adjust the camera sliders and move the pointer across the scene to explore depth.",
+    "spec.runtime": "UI runtime",
+    "spec.qt": "Qt support",
+    "spec.toolchain": "Toolchain",
+    "spec.platforms": "Platforms",
+    "path.kicker": "01 / GET STARTED",
+    "path.title": "Get started with Fluent-Qt",
+    "path.copy": "Open the online Gallery, or go straight to the C++ or Python setup guide.",
+    "path.tryTitle": "Online Gallery",
+    "path.tryCopy": "Search controls, switch themes, and interact with the C++ WebAssembly examples.",
+    "path.tryAction": "Open Gallery",
+    "path.cppTitle": "C++ / Qt Widgets",
+    "path.cppCopy": "Copy the CMake setup and follow the minimal example for an existing Qt Widgets project.",
+    "path.cppAction": "Read the C++ guide",
+    "path.pythonTitle": "Python / PySide6",
+    "path.pythonCopy": "Install FluentQt from PyPI and use the same controls through PySide6.",
+    "path.pythonAction": "View installation",
+    "positioning.titleLine1": "Native controls",
+    "positioning.titleLine2": "C++ APIs",
+    "positioning.copy": "Each control has its own C++ API, states, and layout behavior",
+    "positioning.libraryTitle": "Native Qt Widgets usage",
+    "positioning.libraryCopy": "Uses signals, slots, layouts, and the event loop",
+    "positioning.galleryTitle": "One API for Qt 5 and Qt 6",
+    "positioning.galleryCopy": "Application code does not need separate call sites for each major Qt version",
+    "positioning.shipTitle": "CMake integration",
+    "positioning.shipCopy": "Include FluentQt/FluentQt.h and link FluentQt::FluentQt",
+    "components.title": "Controls by purpose",
+    "components.copy": "A selection from Gallery",
+    "components.buttonCopy": "Includes default, accent, disabled, and icon states",
+    "components.familiesLabel": "Browse the full API catalog",
+    "quickStart.title": "Quick start",
+    "quickStart.copy": "Place this after add_executable(my_app ...). See hello_world for a complete project.",
+    "quickStart.keepProject": "Keep the Widgets project and event loop you already have",
+    "quickStart.libraryOnly": "The library target depends only on Qt Widgets",
+    "quickStart.sameApi": "Use the same application-facing API with Qt 5 and Qt 6",
+    "quickStart.example": "Open the complete hello_world",
+    "quickStart.python": "Python / PySide6 · pip install FluentQt",
+    "quickStart.help": "Ask a question",
+    "copy.copy": "Copy",
+    "copy.copied": "Copied",
+    "copy.announcement": "Code copied to the clipboard",
+    "copy.failed": "Copy failed; select the code manually",
+    "gallery.title": "Gallery examples",
+    "gallery.copy": "This Gallery runs in your browser and does not need a local Qt setup. Project integration still requires Qt 5.15+ or 6.2+.",
+    "gallery.searchTitle": "Search",
+    "gallery.searchCopy": "Locate a page by control name",
+    "gallery.stateTitle": "Verify",
+    "gallery.stateCopy": "Switch Light, Dark, High Contrast, and motion levels",
+    "gallery.codeTitle": "Open an example",
+    "gallery.codeCopy": "Switch between C++ and Python code",
+    "gallery.webAction": "Start the live Gallery",
+    "gallery.liveStateWaiting": "Not loaded",
+    "gallery.liveStateLoading": "Starting",
+    "gallery.liveStateReady": "Interactive",
+    "gallery.liveStateSlow": "Still loading",
+    "gallery.liveStateError": "Could not start",
+    "gallery.loadNow": "Load now",
+    "gallery.fullPage": "Full page",
+    "gallery.waitingTitle": "Loading Gallery…",
+    "gallery.waitingDetail": "",
+    "gallery.loadingTitle": "Loading…",
+    "gallery.loadingDetail": "",
+    "gallery.slowTitle": "Still loading…",
+    "gallery.slowDetail": "",
+    "gallery.readyTitle": "Gallery",
+    "gallery.readyDetail": "",
+    "gallery.errorTitle": "Could not load the example",
+    "gallery.errorDetail": "Check your connection and try again.",
+    "gallery.loadAction": "Start live experience",
+    "gallery.retryAction": "Retry",
+    "gallery.openAction": "Open in a new page",
+    "gallery.frameTitle": "Fluent-Qt Gallery",
+    "gallery.noscript": "Enable JavaScript to try Gallery here.",
+    "aiBuild.title": "Build desktop GUIs with AI",
+    "aiBuild.structureTitle": "Project",
+    "aiBuild.structureCopy": "C++ / PySide6 application structure",
+    "aiBuild.designTitle": "UI",
+    "aiBuild.designCopy": "Fluent components, themes, and color",
+    "aiBuild.previewTitle": "Fast preview",
+    "aiBuild.previewCopy": "See saved changes in Live Scene, then check the compiled C++ sample",
+    "aiBuild.reviewTitle": "Checks",
+    "aiBuild.reviewCopy": "Light / Dark, narrow layouts, and interaction",
+    "aiBuild.skillAction": "Open the Skill",
+    "aiBuild.guideAction": "Docs",
+    "aiBuild.previewAction": "How it works",
+    "aiBuild.caseEyebrow": "REFERENCE BUILD",
+    "aiBuild.caseCopy": "Task groups, run timeline, composer, and Light / Dark themes.",
+    "aiBuild.disclaimer": "Independent FluentQt build; not an official DeepSeek app.",
+    "aiBuild.upstreamAction": "Upstream project",
+    "downloads.title": "Download Gallery",
+    "downloads.copy": "Desktop packages are for offline evaluation; integrate applications through CMake or PyPI.",
+    "downloads.recommended": "Recommended for this device",
+    "downloads.latest": "Latest release",
+    "downloads.all": "All versions and checksums",
+    "downloads.pythonEyebrow": "Optional compatibility",
+    "downloads.pythonGallery": "Python Gallery",
+    "footer.project": "Project",
+    "footer.docs": "Docs",
+    "footer.readme": "README",
+    "footer.license": "Project MIT License",
+    "footer.notices": "Third-party notices",
+    "images.hero": "Actual Fluent-Qt Gallery Home capture on Windows with 3D and Mica enabled, showing the control catalog and samples",
+    "images.button": "Button control page in Fluent-Qt Gallery on Windows with Mica",
+    "images.toggle": "Complete ToggleSwitch control page in Fluent-Qt Gallery",
+    "images.slider": "Complete Slider control page in Fluent-Qt Gallery",
+    "images.collections": "Collections page in Fluent-Qt Gallery on Windows with Mica",
+    "images.system": "Navigation and window UI in Fluent-Qt Gallery on Windows with Mica",
+    "images.webGallery": "C++ Web Gallery preview before loading",
+    "images.deepseekDesktop": "Native DeepSeek Desktop reference UI built with build-fluentqt-gui",
+    "images.settings": "Complete Gallery settings page showing theme, style, and window options",
+    "motion.label": "Particle motion",
+    "qml.kicker": "06 / QMLBRIDGE",
+    "qml.title": "QML support",
+    "qml.copy": "The QmlBridge plugin adds QML support to FluentQt. Load QML pages in Widgets interfaces and share application data and Fluent theme settings.",
+    "qml.guide": "Integration guide",
+    "qml.example": "Complete example",
+    "qml.how": "Gallery: Plugins → QmlBridge → QmlView.",
+    "qml.cppLabel": "C++ snippet",
+    "qml.caption": "A QML text binding to a Widgets input field.",
+    "spatial.reload": "Reload example",
+    "spatial.stopped": "Example stopped"
+  }
+};
+
+const fallbackVersion = "Latest";
+const latestReleaseUrl = "https://github.com/calvinhxx/Fluent-Qt/releases/latest";
+const latestReleaseApi = "https://api.github.com/repos/calvinhxx/Fluent-Qt/releases/latest";
+const releaseState = {
+  architecture: "",
+  language: document.documentElement.lang.toLowerCase().startsWith("zh") ? "zh" : "en",
+  platform: "other",
+  release: null
+};
+
+const metaThemeColor = document.querySelector("meta[name='theme-color']");
+const siteHeader = document.querySelector(".site-header");
+const menuButton = document.querySelector(".menu-button");
+const themeToggle = document.querySelector("[data-theme-toggle]");
+const copyAnnouncement = document.querySelector(".copy-announcement");
+const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const forcedColorsQuery = window.matchMedia("(forced-colors: active)");
+let followsSystemTheme = true;
+let preferredTheme = "light";
+let spatialShowcase = null;
+
+const galleryRoot = document.querySelector("[data-live-gallery]");
+const galleryFrame = document.querySelector("[data-gallery-frame]");
+const galleryMessage = document.querySelector("[data-gallery-message]");
+const galleryDetail = document.querySelector("[data-gallery-detail]");
+const galleryLoadButtons = Array.from(document.querySelectorAll("[data-gallery-load]"));
+let galleryState = "waiting";
+let gallerySlowTimer = 0;
+let galleryRetry = 0;
+
+function dictionary() {
+  return translations[releaseState.language] || translations.en;
+}
+
+function isLocalPreview() {
+  return location.hostname === "localhost" || location.hostname === "127.0.0.1";
+}
+
+function loadAnalytics() {
+  const token = document
+    .querySelector("meta[name='fluent-qt-cloudflare-token']")
+    ?.getAttribute("content")
+    ?.trim();
+
+  if (!token || isLocalPreview()) {
+    return;
+  }
+
+  const script = document.createElement("script");
+  script.defer = true;
+  script.src = "https://static.cloudflareinsights.com/beacon.min.js";
+  script.dataset.cfBeacon = JSON.stringify({ token });
+  document.head.appendChild(script);
+}
+
+function trackEvent(name, properties = {}) {
+  if (!name) {
+    return;
+  }
+  if (typeof window.plausible === "function") {
+    window.plausible(name, { props: properties });
+  }
+  if (window.umami && typeof window.umami.track === "function") {
+    window.umami.track(name, properties);
+  }
+  if (typeof window.gtag === "function") {
+    window.gtag("event", name, properties);
+  }
+}
+
+function detectPlatform() {
+  const source = `${navigator.userAgentData?.platform || ""} ${navigator.platform || ""} ${navigator.userAgent || ""}`.toLowerCase();
+  if (source.includes("win")) return "windows";
+  if (source.includes("mac")) return "mac";
+  if (source.includes("linux")) return "linux";
+  return "other";
+}
+
+async function detectArchitecture() {
+  try {
+    if (navigator.userAgentData?.getHighEntropyValues) {
+      const values = await navigator.userAgentData.getHighEntropyValues(["architecture"]);
+      return String(values.architecture || "").toLowerCase();
+    }
+  } catch {
+    // Architecture is only a hint; platform defaults remain usable.
+  }
+  return "";
+}
+
+function mapRelease(release) {
+  const assets = {};
+  (release.assets || []).forEach((asset) => {
+    const name = asset.name || "";
+    const url = asset.browser_download_url || asset.url || "";
+    if (/Windows-x64\.exe$/i.test(name)) assets.windowsX64 = url;
+    else if (/Windows-arm64\.exe$/i.test(name)) assets.windowsArm = url;
+    else if (/Darwin-arm64\.dmg$/i.test(name)) assets.macArm = url;
+    else if (/Darwin-x86_64\.dmg$/i.test(name)) assets.macIntel = url;
+    else if (/Linux-(?:x86_64|x64)\.deb$/i.test(name)) assets.linuxX64 = url;
+    else if (/Linux-arm64\.deb$/i.test(name)) assets.linuxArm = url;
+  });
+
+  return {
+    assets,
+    tagName: release.tag_name || fallbackVersion,
+    url: release.html_url || latestReleaseUrl
+  };
+}
+
+function fallbackRelease() {
+  return {
+    assets: {},
+    tagName: fallbackVersion,
+    url: document.querySelector("[data-release-link]")?.href || latestReleaseUrl
+  };
+}
+
+function isArm() {
+  return /arm|aarch64/.test(releaseState.architecture);
+}
+
+function isX86() {
+  return /x86|x64|amd64/.test(releaseState.architecture);
+}
+
+function primaryAssetKey() {
+  if (releaseState.platform === "windows") return isArm() ? "windowsArm" : "windowsX64";
+  if (releaseState.platform === "mac") {
+    if (isX86()) return "macIntel";
+    if (isArm()) return "macArm";
+    return "macChoice";
+  }
+  if (releaseState.platform === "linux") return isArm() ? "linuxArm" : "linuxX64";
+  return "release";
+}
+
+function primaryLabel(assetKey) {
+  if (assetKey === "macChoice") {
+    return releaseState.language === "zh" ? "选择 macOS 版本" : "Choose macOS build";
+  }
+
+  const platform = assetKey.startsWith("windows")
+    ? "Windows"
+    : assetKey.startsWith("mac")
+      ? "macOS"
+      : assetKey.startsWith("linux")
+        ? "Linux"
+        : "";
+
+  if (!platform) {
+    return releaseState.language === "zh" ? "打开最新 Release" : "Open latest release";
+  }
+  return releaseState.language === "zh" ? `下载 ${platform} Gallery` : `Download for ${platform}`;
+}
+
+function primaryMeta(assetKey) {
+  const labels = {
+    windowsX64: "Windows · x64",
+    windowsArm: "Windows · ARM64",
+    macIntel: "macOS · x64",
+    macArm: "macOS · ARM64",
+    macChoice: "macOS · x64 / ARM64",
+    linuxX64: "Linux · x64",
+    linuxArm: "Linux · ARM64",
+    release: "GitHub Releases"
+  };
+  return labels[assetKey] || labels.release;
+}
+
+function updateDownloads() {
+  const release = releaseState.release || fallbackRelease();
+  const preferredAssetKey = primaryAssetKey();
+  const assetKey = release.assets[preferredAssetKey]
+    ? preferredAssetKey
+    : preferredAssetKey === "macChoice"
+      ? "macChoice"
+      : "release";
+  const primaryUrl = release.assets[assetKey] || release.url;
+
+  document.querySelectorAll("[data-release-asset]").forEach((link) => {
+    const url = release.assets[link.dataset.releaseAsset];
+    if (url) link.href = url;
+  });
+  document.querySelectorAll("[data-release-link]").forEach((link) => {
+    link.href = release.url;
+  });
+  document.querySelectorAll("[data-release-version]").forEach((node) => {
+    node.textContent = release.tagName;
+  });
+  document.querySelectorAll("[data-primary-download]").forEach((link) => {
+    link.href = primaryUrl || release.url;
+  });
+  document.querySelectorAll("[data-primary-download-label]").forEach((node) => {
+    node.textContent = primaryLabel(assetKey);
+  });
+  document.querySelectorAll("[data-primary-download-meta]").forEach((node) => {
+    node.textContent = primaryMeta(assetKey);
+  });
+}
+
+async function hydrateLatestRelease() {
+  releaseState.release = fallbackRelease();
+  updateDownloads();
+
+  try {
+    const response = await fetch(latestReleaseApi, {
+      headers: { Accept: "application/vnd.github+json" }
+    });
+    if (response.ok) {
+      releaseState.release = mapRelease(await response.json());
+    }
+  } catch {
+    // Checked-in fallback links keep local and offline previews usable.
+  }
+
+  updateDownloads();
+}
+
+function savedTheme() {
+  try {
+    const value = localStorage.getItem("fluent-qt-theme");
+    return normalizeTheme(value);
+  } catch {
+    return null;
+  }
+}
+
+function storeTheme(theme) {
+  try {
+    localStorage.setItem("fluent-qt-theme", theme);
+  } catch {
+    // Theme switching still works when storage is disabled.
+  }
+}
+
+function normalizeTheme(theme) {
+  return theme === "light" || theme === "dark" || theme === "high-contrast"
+    ? theme
+    : null;
+}
+
+function effectiveTheme(theme) {
+  return forcedColorsQuery.matches ? "high-contrast" : (normalizeTheme(theme) || "light");
+}
+
+function activeTheme() {
+  return normalizeTheme(document.documentElement.dataset.theme) || "light";
+}
+
+function nextTheme(theme) {
+  if (theme === "light") return "dark";
+  if (theme === "dark") return "high-contrast";
+  return "light";
+}
+
+function updateThemeToggle() {
+  if (!themeToggle) return;
+  const theme = activeTheme();
+  const forced = forcedColorsQuery.matches;
+  const label = dictionary()[forced
+    ? "a11y.systemHighContrastTheme"
+    : (theme === "light"
+      ? "a11y.useDarkTheme"
+      : (theme === "dark" ? "a11y.useHighContrastTheme" : "a11y.useLightTheme"))];
+  themeToggle.disabled = forced;
+  themeToggle.setAttribute("aria-pressed", theme === "high-contrast" ? "mixed" : String(theme === "dark"));
+  themeToggle.setAttribute("aria-label", label);
+  themeToggle.setAttribute("title", label);
+}
+
+function updateThemeMedia(theme) {
+  const suffix = theme === "light" ? "Light" : "Dark";
+
+  document.querySelectorAll("[data-theme-src-light][data-theme-src-dark]").forEach((image) => {
+    const source = image.dataset[`themeSrc${suffix}`];
+    if (source && image.getAttribute("src") !== source) image.setAttribute("src", source);
+  });
+
+  const previewLink = document.querySelector("[data-gallery-preview]");
+  const heroImage = document.querySelector(".hero-window img");
+  if (previewLink && heroImage) previewLink.href = heroImage.src;
+
+  document.querySelectorAll("[data-theme-label]").forEach((label) => {
+    const value = label.dataset[`themeLabel${suffix}`];
+    if (value) label.textContent = value;
+  });
+}
+
+function syncGalleryTheme() {
+  spatialShowcase?.syncTheme();
+  if (!galleryFrame?.contentWindow || !galleryFrame.getAttribute("src")) return;
+  galleryFrame.contentWindow.postMessage({
+    source: "fluent-qt-site",
+    type: "theme",
+    theme: activeTheme()
+  }, window.location.origin);
+}
+
+function applyTheme(theme, shouldStore = false) {
+  preferredTheme = normalizeTheme(theme) || "light";
+  const effective = effectiveTheme(preferredTheme);
+  document.documentElement.dataset.theme = effective;
+  document.documentElement.style.colorScheme = effective === "light" ? "light" : "dark";
+  metaThemeColor?.setAttribute(
+    "content",
+    effective === "high-contrast" ? "#000000" : (effective === "dark" ? "#070c12" : "#eef3f7")
+  );
+  updateThemeMedia(effective);
+  updateThemeToggle();
+  syncGalleryTheme();
+
+  if (shouldStore) {
+    followsSystemTheme = false;
+    storeTheme(preferredTheme);
+  }
+}
+
+function listenForMediaChange(query, handler) {
+  if (typeof query.addEventListener === "function") query.addEventListener("change", handler);
+  else query.addListener(handler);
+}
+
+function setupReveal() {
+  const nodes = Array.from(document.querySelectorAll("[data-reveal]"));
+  if (!nodes.length) return;
+
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    nodes.forEach((node) => node.classList.add("is-visible"));
+    return;
+  }
+
+  nodes.forEach((node) => {
+    const delay = Number(node.dataset.revealDelay || 0);
+    if (delay > 0) node.style.setProperty("--reveal-delay", `${delay}ms`);
+  });
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add("is-visible");
+        observer.unobserve(entry.target);
+      });
+    },
+    { rootMargin: "0px 0px -8% 0px", threshold: 0.12 }
+  );
+
+  nodes.forEach((node) => observer.observe(node));
+}
+
+function initializeTheme() {
+  const storedTheme = savedTheme();
+  followsSystemTheme = storedTheme === null;
+  applyTheme(storedTheme || (systemThemeQuery.matches ? "dark" : "light"));
+  listenForMediaChange(systemThemeQuery, (event) => {
+    if (followsSystemTheme) applyTheme(event.matches ? "dark" : "light");
+  });
+  listenForMediaChange(forcedColorsQuery, () => applyTheme(preferredTheme));
+}
+
+function menuIsOpen() {
+  return siteHeader?.dataset.menuOpen === "true";
+}
+
+function updateMenuLabel() {
+  if (!menuButton) return;
+  menuButton.setAttribute("aria-label", dictionary()[menuIsOpen() ? "a11y.closeMenu" : "a11y.openMenu"]);
+}
+
+function renderGalleryState() {
+  if (!galleryRoot) return;
+  const values = dictionary();
+  const stateKeys = {
+    waiting: ["gallery.waitingTitle", "gallery.waitingDetail"],
+    loading: ["gallery.loadingTitle", "gallery.loadingDetail"],
+    slow: ["gallery.slowTitle", "gallery.slowDetail"],
+    ready: ["gallery.readyTitle", "gallery.readyDetail"],
+    error: ["gallery.errorTitle", "gallery.errorDetail"]
+  };
+  const [messageKey, detailKey] = stateKeys[galleryState] || stateKeys.waiting;
+  galleryRoot.dataset.galleryState = galleryState;
+  document.documentElement.dataset.galleryLoadState = galleryState;
+  if (galleryMessage) galleryMessage.textContent = values[messageKey];
+  if (galleryDetail) { galleryDetail.textContent = values[detailKey]; galleryDetail.hidden = !values[detailKey]; }
+
+  galleryLoadButtons.forEach((button) => {
+    const label = button.querySelector("span") || button;
+    label.textContent = values["gallery.retryAction"];
+    button.hidden = galleryState !== "error";
+    button.disabled = galleryState !== "error";
+  });
+}
+
+function setMenuOpen(open) {
+  if (!siteHeader || !menuButton) return;
+  siteHeader.dataset.menuOpen = String(open);
+  menuButton.setAttribute("aria-expanded", String(open));
+  updateMenuLabel();
+}
+
+function setupNavigation() {
+  menuButton?.addEventListener("click", () => setMenuOpen(!menuIsOpen()));
+  document.querySelectorAll(".nav-links a, .brand").forEach((link) => {
+    link.addEventListener("click", () => setMenuOpen(false));
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") setMenuOpen(false);
+  });
+  window.matchMedia("(min-width: 901px)").addEventListener?.("change", (event) => {
+    if (event.matches) setMenuOpen(false);
+  });
+
+  const sectionLinks = Array.from(document.querySelectorAll('.nav-links a[href^="#"]'));
+  const sections = sectionLinks
+    .map((link) => ({ link, target: document.querySelector(link.getAttribute("href")) }))
+    .filter((entry) => entry.target);
+  if (sections.length) {
+    let pending = false;
+    const updateActiveSection = () => {
+      pending = false;
+      const offset = (siteHeader?.getBoundingClientRect().bottom || 84) + 72;
+      let active = null;
+      for (const entry of sections) {
+        const rect = entry.target.getBoundingClientRect();
+        if (rect.top <= offset && rect.bottom > offset) {
+          active = entry.link;
+        }
+      }
+      sectionLinks.forEach((link) => {
+        if (link === active) link.setAttribute("aria-current", "location");
+        else link.removeAttribute("aria-current");
+      });
+    };
+    const scheduleUpdate = () => {
+      if (!pending) {
+        pending = true;
+        window.requestAnimationFrame(updateActiveSection);
+      }
+    };
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate, { passive: true });
+    updateActiveSection();
+  }
+}
+
+function fallbackCopy(text) {
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.opacity = "0";
+  document.body.appendChild(textArea);
+  textArea.select();
+  const copied = document.execCommand("copy");
+  textArea.remove();
+  return copied;
+}
+
+async function copyCode(button) {
+  const code = document.getElementById(button.dataset.copyTarget);
+  const label = button.querySelector("[data-copy-label]");
+  if (!code || !label) return;
+
+  let copied = fallbackCopy(code.textContent);
+  if (!copied && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(code.textContent);
+      copied = true;
+    } catch {
+      copied = false;
+    }
+  }
+
+  label.textContent = dictionary()[copied ? "copy.copied" : "copy.copy"];
+  if (copyAnnouncement) {
+    copyAnnouncement.textContent = dictionary()[copied ? "copy.announcement" : "copy.failed"];
+  }
+  trackEvent("copy_cmake", { success: String(copied) });
+  window.setTimeout(() => {
+    label.textContent = dictionary()["copy.copy"];
+  }, 1500);
+}
+
+function galleryUrl(retry = false) {
+  const url = new URL(galleryRoot.dataset.gallerySrc, window.location.href);
+  url.searchParams.set("host-theme", activeTheme());
+  if (retry) url.searchParams.set("site-retry", String(galleryRetry));
+  return url.href;
+}
+
+function loadGallery(retry = false, trigger = "manual") {
+  if (!galleryRoot || !galleryFrame) return;
+  if (galleryState === "loading" || galleryState === "slow" || galleryState === "ready") return;
+
+  if (retry) galleryRetry += 1;
+  galleryState = "loading";
+  renderGalleryState();
+  window.clearTimeout(gallerySlowTimer);
+  gallerySlowTimer = window.setTimeout(() => {
+    if (galleryState === "loading") {
+      galleryState = "slow";
+      renderGalleryState();
+    }
+  }, 30000);
+  galleryFrame.src = galleryUrl(retry);
+  trackEvent("gallery_embed_start", { trigger, retry: String(galleryRetry) });
+}
+
+function setupLiveGallery() {
+  if (!galleryRoot || !galleryFrame) return;
+  renderGalleryState();
+  galleryLoadButtons.forEach((button) => {
+    button.addEventListener("click", () => loadGallery(galleryState === "error", "manual"));
+  });
+
+  window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin || event.source !== galleryFrame.contentWindow) return;
+    if (event.data?.source !== "fluent-qt-gallery") return;
+    if (event.data.state === "ready") {
+      window.clearTimeout(gallerySlowTimer);
+      galleryState = "ready";
+      renderGalleryState();
+      syncGalleryTheme();
+      trackEvent("gallery_embed_ready", { load_ms: String(event.data.detail?.loadMs || "") });
+    } else if (event.data.state === "error" || event.data.state === "exit") {
+      window.clearTimeout(gallerySlowTimer);
+      galleryState = "error";
+      renderGalleryState();
+      trackEvent("gallery_embed_error", { state: event.data.state });
+    }
+  });
+
+  galleryFrame.addEventListener("load", () => {
+    syncGalleryTheme();
+    if (galleryState !== "loading" && galleryState !== "slow") return;
+    try {
+      if (!galleryFrame.contentDocument?.querySelector("#qt-container")) {
+        window.clearTimeout(gallerySlowTimer);
+        galleryState = "error";
+        renderGalleryState();
+      }
+    } catch {
+      // The Pages deployment is same-origin. A custom host can still use the
+      // Gallery's explicit postMessage contract as the authoritative signal.
+    }
+  });
+
+  if (!("IntersectionObserver" in window)) { loadGallery(false, "visible"); return; }
+  const preloadMargin = navigator.connection?.saveData ? "0px" : "240px 0px";
+  const observer = new IntersectionObserver((entries) => {
+    if (!entries.some((entry) => entry.isIntersecting)) return;
+    observer.disconnect();
+    loadGallery(false, "viewport");
+  }, { rootMargin: preloadMargin, threshold: 0.01 });
+  observer.observe(galleryRoot);
+}
+
+function setupInteractions() {
+  themeToggle?.addEventListener("click", () => {
+    if (!forcedColorsQuery.matches) applyTheme(nextTheme(preferredTheme), true);
+  });
+  document.querySelectorAll("[data-copy-target]").forEach((button) => {
+    button.addEventListener("click", () => copyCode(button));
+  });
+  document.querySelectorAll("[data-analytics-event]").forEach((link) => {
+    link.addEventListener("click", () => {
+      trackEvent(link.dataset.analyticsEvent, {
+        asset: link.dataset.releaseAsset || (link.hasAttribute("data-primary-download") ? primaryAssetKey() : ""),
+        release: releaseState.release?.tagName || fallbackVersion
+      });
+    });
+  });
+}
+
+function setupGalleryPreview() {
+  const link = document.querySelector("[data-gallery-preview]");
+  const dialog = document.querySelector(".gallery-preview");
+  const source = document.querySelector(".hero-window img");
+  if (!link || !source || typeof dialog?.showModal !== "function") return;
+
+  link.addEventListener("click", (event) => {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    const image = dialog.querySelector("img");
+    image.src = source.src;
+    image.alt = source.alt;
+    dialog.showModal();
+    const scroll = dialog.querySelector(".gallery-preview-scroll");
+    scroll.scrollTop = scroll.scrollLeft = 0;
+  });
+}
+
+async function setupSpatialShowcase() {
+  const root = document.querySelector('[data-spatial-showcase]');
+  if (!root) return;
+  try {
+    const url = new URL(root.dataset.showcaseController, document.baseURI);
+    const { createSpatialShowcase } = await import(url.href);
+    spatialShowcase = createSpatialShowcase(root, { theme: activeTheme, strings: dictionary });
+  } catch {
+    // A failed controller must not leave the sample waiting with no way to retry.
+    root.dataset.showcaseState = 'error';
+    root.querySelector('[data-showcase-message]').textContent = dictionary()['gallery.errorTitle'];
+    const detail = root.querySelector('[data-showcase-detail]');
+    detail.textContent = dictionary()['gallery.errorDetail'];
+    detail.hidden = false;
+    const retry = root.querySelector('[data-showcase-start]');
+    retry.textContent = dictionary()['gallery.retryAction'];
+    retry.hidden = false;
+    retry.disabled = false;
+    retry.addEventListener('click', () => window.location.reload(), { once: true });
+  }
+}
+
+document.documentElement.setAttribute("data-i18n-ready", "");
+loadAnalytics();
+setupNavigation();
+setupInteractions();
+setupGalleryPreview();
+setupLiveGallery();
+setupReveal();
+releaseState.platform = detectPlatform();
+initializeTheme();
+setupSpatialShowcase();
+import("./hero-particles.js?v=20260908-1")
+  .then(({ createHeroParticles }) => createHeroParticles(document.querySelector(".hero")))
+  .catch(() => { /* Keep the static hero if the optional decoration cannot load. */ });
+hydrateLatestRelease();
+detectArchitecture().then((architecture) => {
+  releaseState.architecture = architecture;
+  updateDownloads();
+});

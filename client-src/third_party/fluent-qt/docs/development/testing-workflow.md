@@ -1,0 +1,604 @@
+# Testing Workflow
+
+> **Status:** Current guide
+
+<!-- docs-nav:top:start -->
+[Documentation](../README.md) › [Development](README.md) › Build, tests, and diagnostics
+
+[← Build Workflow](build-workflow.md) · [Contents](../SUMMARY.md) · [Development index](README.md) · [Qt Component Test Conventions →](qt-component-test-conventions.md)
+<!-- docs-nav:top:end -->
+
+Use this workflow when choosing Qt/GTest/CTest validation commands, filtering
+tests by CTest labels, running or skipping VisualCheck tests, adding test
+targets with `add_qt_test_module`, or synchronizing new component directories
+with README, CMake, and agent instructions.
+
+For an ordinary fix, build the owning target and run its anchored CTest label.
+Add regression coverage for the changed behavior, then expand to dependent
+components or a broader tier when the affected contract requires it. Once the
+relevant checks pass, repeat them only after another change or a new concern.
+Documentation-only changes use the [documentation checks](documentation-style.md),
+plus AI asset checks when their sources change; they do not require a C++ build.
+
+## CTest Labels
+
+Qt/GTest executables link the shared `FluentQtTestSupport` library. Its entry
+point initializes Qt, logging, fonts, and resources once per process. Each run
+uses an independent temporary application-data directory and removes it on
+exit, so parallel instances of the same test binary do not share themes or
+settings. Snapshot names use the executable name and remain stable across runs.
+Assertions must use GTest (`ASSERT_*`, `EXPECT_*`, `GTEST_SKIP`). QtTest remains
+available for input simulation and bounded event-loop waits, for example
+`ASSERT_TRUE(QTest::qWaitFor([&] { return ready; }, 1000))`. Do not use QtTest's
+standalone runner assertion macros: their failure state does not reach GTest's
+exit code/XML and can short-circuit later waits on older Qt. The shared test
+environment contracts check source usage and run a deliberately failing child
+process to verify reporting and subsequent event delivery.
+
+Headless font-metric checks need a real fixed-pitch font. CTest uses the shared
+`FLUENT_QT_TEST_MONOSPACE_FONT` cache setting for C++ and Python Gallery fixtures;
+on Windows and macOS it defaults to an available system monospace font file.
+macOS discovers Menlo or Monaco under `/System/Library/Fonts`. Configuration
+fails on these hosts if none is available and no explicit font is supplied. Override the setting
+with a font file when using a custom test host. Direct headless runs can set the
+same environment variable. All registered offscreen/minimal Python Gallery tests
+receive it, including the glyph paint-device tests.
+
+C++ test support and Python's shared `_test_font_environment.py` fixture follow
+this headless font policy. Keep their thin Qt adapters aligned with these rules:
+
+- Native desktop platforms keep their font selection and do not load this file.
+- With no configured file on other hosts, use the existing system fonts.
+- On offscreen/minimal platforms, a configured file must load and expose a
+  fixed-pitch family; invalid input fails setup.
+- Keep an already fixed-pitch system `FixedFont`. Otherwise substitute its generic
+  family and verify the resolved result is fixed-pitch. The UI `Body` font stays
+  unchanged.
+
+The Gallery and glyph Python fixtures call the shared initializer after resources
+are initialized. This support code is not installed in the Python package.
+Persistence probes should keep this test identity unless their contract
+explicitly requires another scope. The Gallery cold-load probe needs the real
+application identity to enable persistence; it uses a process lock inside Qt's
+test-data directory and restores the setting it changes.
+
+- Register Qt component tests with `add_qt_test_module(test_<name> Test<Name>.cpp
+  [extra sources...])`.
+- The helper applies these labels to discovered tests: `qt`, `unit`,
+  source-directory labels, target name, component name, and validation-tier
+  labels.
+- `ci_fast` is intentionally tiny and reserved for stable core checks used by
+  the default GitHub Actions path.
+- `ci_full` is the curated GitHub Actions full-validation subset. It is broad
+  enough to cover core helpers, representative components, platform-sensitive
+  areas, and app build smoke coverage, but it is not the exhaustive local test
+  set. Keep this target list small enough for a cold macOS arm64 runner.
+- `local_full` is the exhaustive non-manual Qt/GTest validation set for local
+  host runs.
+- `manual_visual` identifies tests that must be reviewed by running the binary
+  directly. `local_desktop` identifies tests that need a real windowing desktop
+  rather than the CI offscreen platform.
+- The `native_window` desktop checks are excluded from `local_full`:
+  they can change Spaces or window activation. They use a native QPA plugin,
+  run serially, and close their test windows automatically. Build
+  `test_window_mac` on macOS or `test_window_win` on Windows, then select
+  `ctest --preset <host-preset> -L '^native_window$' --output-on-failure`
+  in a real desktop session. Unfiltered CTest still selects these checks; use
+  the documented tier filters for unattended runs.
+  Linux provides `test_window_linux`: select `native_xcb` or `native_wayland`
+  with the matching `*-local-desktop` test preset, according to the available
+  session and Qt platform plugin. The KWin material-removal cases skip when
+  compositor blur is unavailable. Never select a missing native platform plugin
+  and treat its startup failure as a passing or skipped test.
+  `test_window` also runs X11 protocol tests without a Linux desktop. They cover
+  protocol-error submission evidence, checked request failures, background
+  preparation caching and native-surface invalidation. The `native_xcb` lane
+  separately sends requests to a destroyed real window and checks connection
+  survival; ordinary protocol tests do not establish native X11 visual acceptance.
+- `visual_gate` is the opt-in representative Light/Dark/RTL snapshot compare
+  (three checked-in PNGs). It is not part of `ci_fast`, `ci_full`, or
+  `local_full`.
+- `performance` contains opt-in native Gallery timing probes, excluded from
+  `ci_fast`, `ci_full`, and `local_full`. Run them serially on an idle desktop
+  with `FLUENT_QT_SPATIAL_BENCHMARK=1` and `ctest -L '^performance$'`. Without
+  that environment variable they skip, including in unfiltered CTest runs.
+- Discovered tests also receive conservative semantic labels based on test-name
+  tokens: `visual`, `interactive`, `animation`, `slow`, `platform_windows`,
+  and `platform_macos`. VisualCheck tests receive `visual`,
+  `interactive`, `manual_visual`, and `local_desktop`.
+- Use anchored label filters so substring matches do not select adjacent
+  components:
+
+```bash
+ctest --preset vcpkg-osx -L '^navigation$'
+ctest --preset vcpkg-osx -L '^date_time$'
+ctest --preset vcpkg-osx -L '^test_date_picker$'
+ctest --preset vcpkg-osx -N -L '^ci_fast$'
+ctest --preset vcpkg-osx -L '^ci_full$' -LE '^(manual_visual|local_desktop)$' --output-on-failure
+ctest --preset vcpkg-osx -L '^local_full$' --output-on-failure
+ctest --preset vcpkg-osx -N -L '^visual$'
+ctest --preset vcpkg-osx -N -L '^manual_visual$'
+ctest --preset vcpkg-osx -N -L '^local_desktop$'
+ctest --preset vcpkg-osx -N -L '^visual_gate$'
+ctest --preset vcpkg-osx -L '^animation$' --output-on-failure
+ctest --preset vcpkg-osx -N -L '^platform_macos$'
+```
+
+Linux runs use the same anchored filters. The `vcpkg-linux` and
+`vcpkg-linux-arm64` test presets exclude `local_desktop` by default; use the
+matching `*-local-desktop` preset to list tests that need a real X11 or Wayland
+desktop session:
+
+```bash
+ctest --preset vcpkg-linux -L '^ci_full$' --output-on-failure
+ctest --preset vcpkg-linux-local-desktop -N
+ctest --preset vcpkg-linux-arm64-local-desktop -N
+```
+
+- High-DPI smoke tests have the `high_dpi` label and run at 110%, 125%, 150%,
+  175%, 200%, and 300% offscreen scale factors. Build `test_high_dpi` and run
+  the anchored label on any host:
+
+```bash
+python3 tools/dev/fluent_qt_build.py --preset vcpkg-linux --target test_high_dpi
+ctest --preset vcpkg-linux -L '^high_dpi$' --output-on-failure
+```
+
+See [High-DPI Workflow](high-dpi-workflow.md) for application integration and
+real mixed-monitor review.
+
+- Use established tokens in new test names when a semantic label should apply:
+  `VisualCheck`, `Interactive`, `Animation`/`Animated`, `Slow`, `Windows`/`Win32`,
+  or `MacOS`/`MacOs`/`Darwin`/`Cocoa`.
+- Semantic labels are additive. VisualCheck tests still keep `qt`, `unit`,
+  category, target, and component labels.
+
+## Removing a Test Matrix Axis
+
+When a public mode, platform abstraction, or product variant is removed, do
+not delete its whole parameterized fixture until every assertion is classified:
+
+1. Move design-neutral behavior, signal, ownership, and no-op assertions into
+   the component's normal `Contract_*` fixture.
+2. Keep representative Fluent Light/Dark state distinctions and painted
+   geometry/color invariants when the deleted matrix was their only automated
+   coverage.
+3. Delete only assertions that require the removed axis or its branch-specific
+   output. Do not retain a one-value compatibility matrix merely to preserve
+   the old fixture shape.
+4. Compare the deleted and remaining test names, then confirm that no affected
+   component is left with only a skipped/manual `VisualCheck` unless another
+   focused target owns its executable contract.
+
+Run the affected component labels and `visual_gate` after the extraction.
+VisualCheck remains a separate manual review surface; it does not replace
+automated state and pixel invariants.
+
+## Local static gate
+
+Run the Qt-free [compatibility ownership check](compatibility-policy.md#automated-boundary-gate)
+before building or committing component and platform changes:
+
+```bash
+python3 tools/quality/check_compatibility_boundaries.py --project-root . --self-test
+```
+
+It checks C++ and Python source placement, including new files, without importing
+Qt. Its rules and regressions live together in `tools/quality/`; runtime
+compatibility tests remain responsible for behavior. A passing source check
+does not replace the [design ownership review](compatibility-policy.md#design-before-implementation).
+
+Run the C++ format contract before committing or pushing. The check uses
+clang-format 22.1.8 and formats incrementally by complete touched file, so a
+legacy file may produce a larger mechanical diff the first time it is changed.
+The component and compatibility directories follow this contract as of
+2026-10-16.
+
+The [shared rules](../../.clang-format) target 120 columns and use four-space
+continuations. Short declarations stay compact. Long function declarations
+place one parameter on each continuation line and prefer keeping the return
+type with the function name. Long conditions put their operators at the start
+of continuation lines. Existing comment layout and complete string literals
+are preserved, even when they exceed the target width.
+
+Qt properties use clang-format 22's
+[Qt property clause support](https://releases.llvm.org/22.1.0/tools/clang/docs/ClangFormatStyleOptions.html#allowbreakbeforeqtproperty).
+A property that fits stays on one line; a longer property breaks between
+complete clauses, keeping each keyword with its value:
+
+```cpp
+Q_PROPERTY(Typography::FontRole fontStyle READ fontStyle WRITE setFontStyle NOTIFY fontStyleChanged)
+Q_PROPERTY(QString accessibilityDescription
+    READ accessibilityDescription
+    WRITE setAccessibilityDescription
+    NOTIFY accessibilityDescriptionChanged)
+```
+
+Install the pinned formatter in a project-local environment:
+
+```bash
+python3 -m venv .venv-format
+.venv-format/bin/python -m pip install clang-format==22.1.8
+```
+
+On Windows, use `.venv-format\Scripts\python.exe` for the second command. The
+checker discovers this environment automatically. An explicit
+`--clang-format PATH` or `FLUENTQT_CLANG_FORMAT=/absolute/path/to/clang-format`
+overrides it; otherwise the checker falls back to `PATH`. Every selected
+formatter must report exactly version 22.1.8. CI installs the same package
+before running the formatter's contract tests and checking changed files.
+Editors with format-on-save must use this version and the repository's
+`.clang-format` as well.
+
+Check the current working tree before staging, the exact staged snapshots
+before committing, or the committed pull-request diff before pushing:
+
+```bash
+python3 tools/quality/check_cpp_format.py --working-tree
+python3 tools/quality/check_cpp_format.py --staged
+git fetch origin main
+python3 tools/quality/check_cpp_format.py --changed-from origin/main
+```
+
+Use `--working-tree --fix` on the affected branch to update the working-tree
+copies, then review and stage the result. Keep a large mechanical rewrite in a
+separate `style` commit. `--staged` checks the index blobs and `--changed-from`
+checks the selected committed blobs, so unrelated unstaged edits cannot make
+either check pass.
+
+Enable the repository hooks once per clone to run the same checker
+automatically:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The pre-commit hook checks staged whitespace and C++ snapshots. The pre-push
+hook checks whitespace and C++ files in every revision being pushed relative
+to the pushed remote's `main` ref, even when it is not the currently checked
+out branch. Both hooks are read-only and never format files. Fork workflows can
+set `FLUENTQT_FORMAT_BASE` to a different local base ref.
+
+Public-header and site changes must also keep the committed generated outputs
+current. Run these deterministic checks locally; the CI planning job repeats
+them before any pull request can merge, while Pages repeats them before deploy:
+
+```bash
+python3 tools/site/generate_localized_site.py --check
+python3 tools/site/generate_api_reference.py --check
+```
+
+The full [WebAssembly browser smoke](webassembly-workflow.md#browser-smoke)
+includes five Drawer recreation cycles inside the existing overlay contract.
+Its Qt-free unit checks exercise the same proxy-snapshot validator against
+duplicates, reused control types and hidden nodes retained after destruction:
+
+```bash
+python3 .github/scripts/test_wasm_browser_smoke.py
+python3 tools/wasm/test_qt_accessibility_overlay.py
+```
+
+These checks validate the harness and pinned source preparation; the real
+browser full run remains required after changing the lifecycle adaptation.
+
+## Local integration preflight
+
+For routine edits, start with the owning tests on the current SDK:
+
+```bash
+python3 tools/dev/fluent_qt_preflight.py --quick --plan \
+  --paths tests/components/basicinput/TestButton.cpp
+python3 tools/dev/fluent_qt_preflight.py --quick --config Debug \
+  --paths tests/components/basicinput/TestButton.cpp \
+  --build-dir build/vcpkg-osx
+```
+
+`--quick` defaults to uncommitted changes relative to `HEAD`, including new files.
+Use `--paths` to work on a smaller part of a dirty checkout; the report explicitly
+limits its result to those paths. CMake registrations provide test-file ownership.
+A component implementation with a matching test selects that owner; headers,
+shared infrastructure and unknown mappings retain the broader category or host
+selection. This mode gives local feedback, not complete dependent-component or
+cross-platform coverage. It does not run the release SDK matrix or replace the
+integration checks below.
+
+Python test-file edits select their registered suite. Known private Spatial
+Gallery modules select their compositor/integration suites; other binding changes
+retain the full Python selection. Supply the configured `--pyside-build-dir` for
+Python checks. Manual desktop checks remain separate. A missing required build
+directory fails; `--plan` can inspect the selection without one.
+
+Catch compatibility-boundary, component-selection, wheel-file,
+generated-wrapper verifier, and Gallery contract omissions before compiling Qt
+or pushing a pull request:
+
+```bash
+python3 tools/dev/fluent_qt_preflight.py --checks-only
+```
+
+The ordinary PySide6 binding suite excludes the lifecycle methods that CTest
+runs in separate processes. CMake generates this exclusion list from the same
+registrations; a missing method fails the runner. Directly running
+`bindings/pyside6/tests/test_bindings.py` still executes the complete suite.
+Use the `pyside_native` label for the separate Gallery desktop checks. Those
+checks require a native Qt platform and are not included by `-L '^pyside$'`.
+
+The same source/packaging checks run in CI's planning job and the release
+preflight. They require no Qt installation. This command does not verify
+runtime ownership or compatibility; the generated-wrapper verifier's unit
+tests are distinct from checking an actual generated binding.
+
+The compatibility boundary gate runs first and stops preflight on a violation.
+Quick mode also includes it for C++ sources/headers and Python library/Gallery
+sources, even when runtime selection is limited to one owner.
+
+For runtime checks, use the CI path classifier with the branch diff plus staged,
+unstaged, and untracked changes. Renames include both paths. Preview the selected
+tests, then supply existing configured builds:
+
+```bash
+python3 tools/dev/fluent_qt_preflight.py --base-ref origin/main --plan
+python3 tools/dev/fluent_qt_preflight.py --base-ref origin/main \
+  --build-dir build/vcpkg-osx --pyside-build-dir build/pyside6-local
+```
+
+Integration mode and CI map `app/` and `tests/gallery/` changes to
+`fluent_qt_gallery_tests` and the `gallery` label. Mixed component/Gallery
+changes combine their groups; shared library or build changes still select
+the full host set. Gallery selection requires `FLUENT_QT_BUILD_GALLERY=ON`.
+
+Build directory names are examples; use the directories configured for your
+host. Native builds need `BUILD_TESTING` and `FLUENT_QT_BUILD_TESTS`; bindings
+builds need `BUILD_TESTING`, `FLUENT_QT_BUILD_PYSIDE6_BINDINGS`, and
+`FLUENT_QT_BUILD_PYSIDE6_GALLERY`. Repeat either build-directory option to test
+other SDKs. Use `--config Debug` for a multi-configuration Debug build. The
+runner reuses the adaptive build wrapper and CTest labels, excludes manual
+desktop checks, defaults CTest to offscreen, and fails if no tests are selected.
+It refreshes CMake generation with the existing cache before building, so newly
+registered targets are available with Makefile generators as well as Ninja.
+It stops at the first failure; it does not install SDKs or launch remote CI.
+
+`build/local-preflight/report.json` records the changed paths, commit, host,
+configured Qt SDKs, Python runtime versions, commands, results, and log paths.
+Use `--report PATH` to retain separate runs. Exit `1` means a failed check;
+exit `2` means required version coverage remains incomplete. A newer SDK pass
+does not count as a minimum-version pass. The required native minimum lines
+and Python compatibility/release lines come from the existing CI matrices.
+Missing environments remain explicit work for another host or the matching CI
+lane. A plan, cheap-check result, or local runtime result does not replace
+installed-wheel, platform, or exact-commit release validation.
+
+The Gallery wheel smoke script can also run from outside the checkout in a
+clean environment containing the installed wheels. It checks the installed
+wheel's `RECORD`, contract, and live routes without consulting source files.
+Pass `--project-root /path/to/Fluent-QT` to additionally compare the package
+with native Gallery sources and images. CI and publication always pass this
+option; an invalid source root fails instead of skipping the comparison.
+
+## Validation Tiers
+
+Use the [CI workflow](ci-workflow.md) for fast/full triggers, reusable module
+ownership, matrix sources, and release candidate routing. CI-full is a curated
+subset; local-full runs the non-manual tests for the current host.
+
+Local host full validation means configuring, building, and running all CTest
+non-manual tests for the current host preset. VisualCheck tests stay in
+`manual_visual`; use `-LE '^local_desktop$'` when running on a headless host:
+
+```bash
+cmake --preset vcpkg-osx
+python3 tools/dev/fluent_qt_build.py --preset vcpkg-osx --target fluent_qt_all_tests
+ctest --preset vcpkg-osx -L '^local_full$' --output-on-failure --timeout 180
+```
+
+```powershell
+cmake --preset vcpkg-windows
+python tools/dev/fluent_qt_build.py --preset vcpkg-windows --target fluent_qt_all_tests
+ctest --preset vcpkg-windows -L '^local_full$' --output-on-failure --timeout 180
+```
+
+On native Windows ARM64 with the Qt `msvc2022_arm64` kit, substitute
+`vcpkg-windows-arm64` for `vcpkg-windows`. An x64-hosted ARM64 cross-build can
+compile the same targets but cannot execute this test preset.
+
+When running a Windows GTest binary outside Qt Creator or a configured CMake
+preset environment, validate the loader environment before starting any test
+batch:
+
+- Build one process `Path` containing the selected Qt `bin` directory and the
+  matching vcpkg Debug/Release runtime directories. Do not keep competing
+  process-level `Path` and `PATH` values.
+- Run exactly one focused binary with `--gtest_list_tests` first. Continue only
+  when that probe exits successfully.
+- Automation launchers must suppress Windows loader and fault-reporting dialogs
+  (for example with the documented Win32 process error-mode flags) so a missing
+  dependency fails in the terminal rather than blocking the desktop.
+- After the probe, execute one test binary per process and combine related
+  cases with one `--gtest_filter`. Do not launch an unverified CTest batch from
+  an inherited shell environment.
+
+```bash
+cmake --preset vcpkg-linux
+python3 tools/dev/fluent_qt_build.py --preset vcpkg-linux --target fluent_qt_all_tests
+ctest --preset vcpkg-linux -L '^local_full$' --output-on-failure --timeout 180
+```
+
+On Linux, both architecture-specific test presets intentionally exclude
+`local_desktop`, so these commands run the headless-safe `local_full` subset.
+Run the matching `*-local-desktop -N` preset separately to discover tests that
+need a real desktop, after building the specific test target under review or
+the aggregate `fluent_qt_all_tests` target. Automated CTest runs inject
+`SKIP_VISUAL_TEST=1`; for real desktop behavior, run the target binary directly
+without `SKIP_VISUAL_TEST` and set `QT_QPA_PLATFORM=xcb` or `wayland` when your
+session needs an explicit platform.
+
+See [Linux Workflow](linux-workflow.md) for the desktop Linux portability target,
+Ubuntu 22.04 reference dependencies, local desktop commands, Qt 5.15.2
+official-kit validation, and optional WSL2 filesystem guidance.
+
+## Component Contract Baseline
+
+Tests whose names contain `Contract` receive the `contract` label. A desired
+behavior that is not yet implemented is named `DISABLED_Contract_*` and also
+receives `known_contract_gap`. Known gaps are excluded from `local_full`,
+`ci_fast`, and `ci_full`. List `known_contract_gap` to inspect the current gaps; the dated Phase 1
+results are recorded in the component contract baseline.
+
+```bash
+python3 tools/dev/fluent_qt_build.py --preset vcpkg-linux --target fluent_qt_contract_tests
+ctest --preset vcpkg-linux -L '^contract$' -LE '^known_contract_gap$' --output-on-failure
+ctest --preset vcpkg-linux -N -L '^known_contract_gap$'
+```
+
+If a future known gap is added, run it explicitly with the owning GTest binary
+and `--gtest_also_run_disabled_tests`. Run one at a time because a lifetime or
+layout gap may terminate the current process. Current accepted contracts and
+deferred decisions are in
+[Component Contract Baseline](component-contract-baseline.md).
+
+Linux also provides a focused ASan/UBSan preset:
+
+```bash
+cmake --preset vcpkg-linux-sanitized
+python3 tools/dev/fluent_qt_build.py --preset vcpkg-linux-sanitized --target fluent_qt_contract_tests
+ctest --preset vcpkg-linux-sanitized --output-on-failure
+```
+
+`FLUENT_QT_ENABLE_SANITIZERS` is opt-in and does not affect release or ordinary
+debug builds.
+
+## VisualCheck
+
+- Automated CTest runs inject `SKIP_VISUAL_TEST=1`; VisualCheck tests should
+  skip in that mode.
+- For manual UI review, run the test binary directly:
+
+```bash
+./build/vcpkg-osx/tests/components/<category>/<test_target> --gtest_filter="*VisualCheck*"
+```
+
+On Linux, use the corresponding `build/vcpkg-linux/...` or
+`build/vcpkg-linux-arm64/...` binary path in an X11 or Wayland desktop session.
+WSLg is also suitable as an optional local validation host. Run these binaries
+directly so `SKIP_VISUAL_TEST` is not inherited from CTest.
+
+- For deterministic snapshot generation, run a migrated VisualCheck binary with
+  `VISUAL_SNAPSHOT=1`:
+
+```bash
+VISUAL_SNAPSHOT=1 ./build/vcpkg-osx/tests/components/textfields/test_label --gtest_filter="LabelTest.VisualCheck"
+```
+
+- Snapshot files are written to `build/<preset>/visual/` using stable names such
+  as `<target>__<suite>__<test>[_variant].png`. Repeated runs overwrite the same
+  file. Migrated VisualCheck tests still only verify that a non-empty PNG was
+  written. They are not a screenshot farm and do not compare against baselines.
+- If both `SKIP_VISUAL_TEST=1` and `VISUAL_SNAPSHOT=1` are set, skip behavior wins
+  and no snapshot should be generated.
+- VisualCheck tests must guard on `SKIP_VISUAL_TEST`, show the test window, and
+  block with `qApp->exec()` until the window closes unless they branch to the
+  shared snapshot helper for `VISUAL_SNAPSHOT=1`.
+- Do not replace VisualCheck event-loop blocking with `QTest::qWait()`.
+- Do not convert every VisualCheck into a baseline compare. The pixel gate below
+  is a separate, tiny allowlist.
+
+## Representative visual gate
+
+A 1.7 quality-track gate for three checked-in PNGs under
+[tests/visual-baselines/](../../tests/visual-baselines/README.md):
+
+- Button Rest/Hover/Pressed/Focus/Disabled in Light LTR
+- The same Button row in Dark LTR
+- Compact TreeView in Light RTL
+
+Compare uses exact logical-pixel equality via `tests::support::compareVisualImages`.
+A mismatch fails the test and writes `<name>.diff.png` next to the capture under
+`build/<preset>/visual/`.
+
+If the approved state includes keyboard focus, assign the target a stable
+object name and set `VisualSnapshotOptions::focusObjectName`. The snapshot
+helper activates the shown window and restores that focus immediately before
+capture, so a background CTest launch cannot silently drop the focus ring.
+
+Default automated CTest still injects `SKIP_VISUAL_TEST=1`, so discovered
+`VisualGateTest.*` rows skip. `VisualGate.CompareBaselines` is the row that
+diffs against the checked-in PNGs. Both are labeled `visual_gate`; the compare
+entry is also `local_desktop`. Neither is in `ci_fast`, `ci_full`, or
+`local_full`.
+
+Run the gate on the approval host (macOS arm64 / `vcpkg-osx`, Fusion, bundled
+fonts, `QT_SCALE_FACTOR=1`, `QT_FONT_DPI=96`):
+
+```bash
+python3 tools/dev/fluent_qt_build.py --preset vcpkg-osx --target test_visual_gate
+ctest --preset vcpkg-osx -L '^visual_gate$' --output-on-failure
+```
+
+Equivalent direct invocation:
+
+```bash
+VISUAL_SNAPSHOT=1 VISUAL_COMPARE=1 QT_SCALE_FACTOR=1 QT_FONT_DPI=96 \
+  ./build/vcpkg-osx/tests/components/test_visual_gate
+```
+
+Regenerate baselines after an intentional visual change:
+
+```bash
+VISUAL_SNAPSHOT=1 VISUAL_UPDATE_BASELINE=1 QT_SCALE_FACTOR=1 QT_FONT_DPI=96 \
+  ./build/vcpkg-osx/tests/components/test_visual_gate
+```
+
+### CI limitation
+
+Hosted runners use `QT_QPA_PLATFORM=offscreen`. Offscreen, Linux, and Windows
+pixel output does not match these macOS desktop baselines (font engine, DPI,
+platform plugin). The gate therefore:
+
+- Skips on headless `offscreen` / `minimal` platforms
+- Skips compare/update unless the process is macOS arm64 + Cocoa + Fusion with
+  `QT_SCALE_FACTOR=1`, `QT_FONT_DPI=96`, and no per-screen scale override
+- Is excluded from GitHub Actions by the `ci_fast` / `ci_full` label filters and
+  by `-LE '^(manual_visual|local_desktop)$'`
+- Must not be added as a default-red CI job
+
+Keep the helper tests in `test_qt_test_environment` (synthetic image compare,
+missing baseline) on the normal CTest path. Those do not render widgets against
+checked-in PNGs.
+
+See [Qt Component Test Conventions](qt-component-test-conventions.md) for
+VisualCheck authoring rules.
+See [Visual Review](visual-review.md) for manual UI review workflow.
+
+## App Visual Geometry Verification
+
+The [App Visual Geometry Verification](app-visual-geometry-verification.md)
+guide owns the app-only scope, object-name convention, assertion helpers,
+geometry-dump command, and the boundary between measurable layout checks and
+subjective visual review.
+
+## Component Directories
+
+- `src/components/` should only contain directories with implemented components.
+- Do not keep empty placeholder directories.
+- Create a new component directory only when the first component in that
+  category lands.
+- When adding or removing a component directory, update the README overview,
+  tests CMake, and `AGENTS.md`.
+
+## Validation Defaults
+
+- Configure with `cmake --preset <host-preset>` when CMake structure or test
+  discovery changes. Follow [build setup](build-workflow.md#first-use-setup)
+  on a fresh checkout.
+- Build focused targets with `python3 tools/dev/fluent_qt_build.py
+  --preset <host-preset> --target <test_target>`.
+- Prefer focused CTest label runs after changing a test target:
+
+```bash
+ctest --preset vcpkg-osx -L '^test_<name>$' --output-on-failure
+```
+
+<!-- docs-nav:bottom:start -->
+---
+[← Build Workflow](build-workflow.md) · [Contents](../SUMMARY.md) · [Development index](README.md) · [Qt Component Test Conventions →](qt-component-test-conventions.md)
+<!-- docs-nav:bottom:end -->

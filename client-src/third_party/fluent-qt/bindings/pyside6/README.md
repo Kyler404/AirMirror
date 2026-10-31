@@ -1,0 +1,375 @@
+# PySide6 bindings
+
+> **Status:** Current build, usage, and distribution guide
+
+[Documentation home](../../docs/README.md) · [Contents](../../docs/SUMMARY.md)
+
+FluentQt exposes the native C++ widget library to Python through one Shiboken6
+extension. Use this page to choose the right entry point; detailed compatibility,
+packaging, and publication rules live in the linked documents instead of being
+repeated here.
+
+## Choose a path
+
+| Goal | Start here |
+|---|---|
+| Install and use FluentQt | [Python package guide](PYPI.md) |
+| Run a minimal application | [Hello World](examples/hello_world/README.md) |
+| Explore the complete component set | [Python Gallery package](gallery/README.md) |
+| Build the bindings from source | [Build from source](#build-from-source) |
+| Check supported Python, Qt, platforms, and APIs | [Compatibility and coverage](ROADMAP.md) |
+| Publish wheels | [Publishing runbook](PUBLISHING.md) |
+
+The Python deliverables stay separate:
+
+- `FluentQt` / `import fluentqt` is the reusable native UILib.
+- `FluentQt-Gallery` / `import fluentqt_gallery` is an example application that
+  depends on the exact matching `FluentQt` version.
+
+## Compatibility boundary
+
+- The C++ library supports Qt Widgets 5.15+ and 6.2+.
+- The optional PySide6 target is Qt 6-only and disabled by default.
+- Source builds retain a CPython 3.10 plus Qt/PySide6/Shiboken6 6.2.4 minimum
+  compatibility gate.
+- PySide6, Shiboken6 runtime, Shiboken6 generator, and the C++ Qt SDK must use
+  the same version and architecture.
+- Published wheels support only the combinations declared in
+  [`wheel-matrix.json`](wheel-matrix.json). A source-compatible combination is
+  not automatically a prebuilt-wheel promise.
+- PySide2, Qt 5 Python, PyPy, and 32-bit x86 are outside the supported binding
+  contract.
+
+Use machine-readable sources for changing facts:
+
+| Fact | Canonical source |
+|---|---|
+| Public Python names and required methods | [`api-manifest.json`](api-manifest.json) |
+| CPython, platform, architecture, Qt, and wheel tags | [`wheel-matrix.json`](wheel-matrix.json) |
+| API versioning and deprecations | [API compatibility policy](API_COMPATIBILITY.md) |
+| Linux repair and audit rules | [manylinux policy](MANYLINUX.md) |
+
+## Install from PyPI
+
+```bash
+python -m pip install FluentQt
+```
+
+The wheel installs the matching PySide6 and Shiboken6 runtime dependencies.
+Follow the [package guide](PYPI.md) for the minimal application and current
+published compatibility table.
+
+Install the standalone Gallery when you want runnable examples:
+
+```bash
+python -m pip install FluentQt-Gallery
+python -m fluentqt_gallery
+```
+
+The Gallery imports only public `fluentqt` APIs. Its source and artwork are not
+included in the reusable UILib wheel.
+
+## Build from source
+
+Create a matched Qt for Python environment. The minimum compatibility example
+uses Python 3.10 and Qt/PySide/Shiboken 6.2.4:
+
+```bash
+python3.10 -m venv .venv-pyside
+.venv-pyside/bin/python -m pip install PySide6==6.2.4
+.venv-pyside/bin/python -m pip install \
+  --index-url https://download.qt.io/official_releases/QtForPython/ \
+  shiboken6_generator==6.2.4
+```
+
+Configure with the matching C++ Qt SDK and the same interpreter:
+
+```bash
+cmake -S . -B build/pyside6 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/path/to/Qt/6.2.4 \
+  -DPython_EXECUTABLE=/path/to/.venv-pyside/bin/python \
+  -DFLUENT_QT_BUILD_PYSIDE6_BINDINGS=ON \
+  -DFLUENT_QT_BUILD_PYSIDE6_GALLERY=ON \
+  -DFLUENT_QT_BUILD_EXAMPLES=OFF \
+  -DFLUENT_QT_INSTALL=OFF \
+  -DBUILD_TESTING=ON
+cmake --build build/pyside6 --target fluentqt_pyside6_stubs --parallel
+ctest --test-dir build/pyside6 -L '^pyside$' --output-on-failure
+```
+
+`fluentqt_pyside6_stubs` builds the native extension and generates the typed
+package facade. The manifest check rejects missing public classes, enums,
+functions, variables, or required methods before wheel creation.
+
+Build both distributions when a clean-wheel test or release rehearsal is
+required:
+
+```bash
+cmake --build build/pyside6 --target fluentqt_pyside6_wheels --parallel
+```
+
+The UILib wheel is written to `build/pyside6/wheelhouse/`; the Gallery wheel is
+written to `build/pyside6/gallery-wheelhouse/`. Use the
+[publishing runbook](PUBLISHING.md) for clean-install, TestPyPI, approval, and
+artifact-verification steps.
+
+## Run representative examples
+
+### Optional Plugins module
+
+Enable `FLUENT_QT_BUILD_PLUGINS=ON` in the matched source-build environment and
+build `fluentqt_pyside6_stubs` to include `fluentqt.plugins`. Spatial includes
+this dependency automatically. The Python module uses the native plugin
+manager for metadata, dependency ordering, activation, rollback, and cleanup.
+See the [Plugins contract](../../docs/architecture/plugins.md) for extension
+authoring and caller ownership.
+
+The [plugin extension example](examples/plugin_extension.py) demonstrates
+registration, activation, widget creation, and deactivation. With the generated
+package on `PYTHONPATH`, run it normally or pass `--smoke-test` for an automated
+lifecycle run. That run does not establish native visual acceptance.
+The [example entry table](../../docs/architecture/plugins.md#minimal-extension-example)
+identifies the matching C++ executable and browser app.
+
+The manager borrows plugins and the host. Keep a Python reference to an
+unparented plugin while it is registered; dropping its last reference permits
+garbage collection, which unregisters it and stops surviving dependents. A Qt
+parent can own a Python plugin instead. Registration does not change that
+parent, unregistering does not delete the plugin, and destroying its actual Qt
+owner removes its registration. Factory widgets keep the parent requested by
+the application and can outlive both the manager and plugin.
+
+The optional module is a source-build capability; published wheel coverage
+remains governed by the [wheel matrix](wheel-matrix.json). Browser applications
+compile the shared C++ module for WebAssembly rather than running Python or
+loading native dynamic libraries.
+
+### Optional Spatial module
+
+The default binding build keeps the base 2D API. To include `SpatialView`,
+`SpatialItem`, and `ParticleLayer`, enable Spatial in the same matched source-build environment:
+
+```bash
+cmake -S . -B build/pyside6 -DFLUENT_QT_BUILD_SPATIAL=ON
+python3 tools/dev/fluent_qt_build.py build/pyside6 --target fluentqt_pyside6_stubs
+PYTHONPATH=build/pyside6/python \
+  .venv-pyside/bin/python bindings/pyside6/examples/hello_world/spatial.py
+```
+
+Import from `fluentqt.spatial`. Rendering and pointer animation use the native
+C++ implementation; Python handles configuration and application signals.
+The [Spatial Hello World guide](examples/hello_world/README.md) describes the
+Card-and-Button layout and matching native C++ and browser entries.
+Activate a `SpatialSession` before creating or attaching its surfaces:
+
+```python
+from fluentqt.spatial import SpatialSession
+from PySide6.QtWidgets import QWidget
+
+session = SpatialSession(window, window)
+active = session.activate()
+if active:
+    session.prepareWindow(window)  # Best-effort while the window is hidden.
+view = session.createView(window) if active else None
+if view is None:
+    session.deactivate()
+    content = QWidget()  # Populate an ordinary 2D surface with application controls.
+else:
+    content = view
+window.setContentWidget(content)
+```
+
+Check activation and each nullable factory result before accessing it. The full
+Hello World example retains its Card and Button in an ordinary centered layout
+when activation or view creation fails. A false preparation result alone does
+not make a Spatial view unavailable on WebAssembly or offscreen hosts.
+
+The session shares the C++ plugin lifecycle. Applications that already manage a
+larger extension graph can register `fluentqt.spatial.SpatialPlugin` through
+`fluentqt.plugins.PluginManager` instead. Activation creates no GPU context.
+Deactivation restores tracked views to flat Raster mode and releases particle
+delegation; returned objects, content widgets, and models keep their recorded ownership. Existing
+`SpatialView` subclasses can join the session with `attachView(view)`.
+Use `addOwnedWidget()` to transfer a widget to the view, `addBorrowedWidget()`
+to retain it, or `addReparentedWidget()` to restore its original parent on release.
+
+`ParticleLayer` is a lower-level integration for an **existing** OpenGL
+compositor, not another widget or particle simulation. It borrows a visible
+`ParticleBackdrop`; that component still defaults to CPU rendering. For example:
+
+```python
+from fluentqt.spatial import SpatialSession
+
+session = SpatialSession(canvas, canvas)
+layer = session.createParticleLayer(backdrop, canvas) if session.activate() else None
+if layer is not None:
+    layer.frameRequested.connect(canvas.update)
+
+# In canvas.paintGL(), with its context current and an aggregate byte allowance:
+if layer is not None and layer.render(canvas.devicePixelRatioF(), remaining_bytes):
+    texture = layer.textureId()  # Premultiplied RGBA, bottom-up GL coordinates.
+    # Sample this texture in the compositor, preserving widget clipping/stacking.
+
+# On 2D mode or compositor teardown, resume CPU at the same particle phase:
+if layer is not None:
+    layer.release()
+# At the end of the extension's scope, release every tracked adapter:
+session.deactivate()
+```
+
+Only a successful `render()` delegates the source's painting and frame requests.
+Failed activation or a `None` adapter leaves the original ParticleBackdrop's
+CPU presentation available.
+The caller selects the hardware context and preserves foreground occlusion;
+`render()` fails safely on invalid contexts, hidden sources, or insufficient
+budget. `allocatedBytes()` includes actual driver MSAA storage. The Python
+Gallery's [particle compositor](gallery/src/fluentqt_gallery/particle_compositor.py)
+is the complete implementation for cached pages and foreground widgets.
+
+This build adds Qt OpenGL/OpenGLWidgets to the same extension, sharing theme
+and motion state with the base controls. A 2D-only source build does not link
+these modules. Release wheels include Spatial on every platform starting with
+1.9.1, correcting its omission from the 1.9.0 wheels. With
+`FLUENT_QT_BUILD_PYSIDE6_GALLERY=ON`, the Python Gallery
+uses **Settings → 3D Gallery** for its shell and every Spatial example, matching
+the C++ and WebAssembly Gallery. See the [Gallery guide](gallery/README.md#spatial-mode).
+See [Spatial](../../docs/architecture/spatial-view.md) for supported content and fallback behavior.
+
+### Optional QmlBridge module
+
+Enable `FLUENT_QT_BUILD_QML_BRIDGE=ON` in the matched Qt/PySide6 source build
+and rebuild `fluentqt_pyside6_stubs` to include `fluentqt.qmlbridge`. The module
+exports the shared native `QmlPlugin`, `QmlSession`, `QmlTheme`,
+`QmlTextureLayer`, and `QmlView`.
+Its Qt QuickWidgets dependencies remain opt-in. Importing `fluentqt` does not
+import the Quick Python modules; explicit `fluentqt.qmlbridge` imports register
+the converters used by returned QML root objects.
+
+Call `QmlSession.prepareApplication()` once at application startup, before the
+first Quick surface, when sharing a window with Spatial or `QOpenGLWidget`.
+Then activate a session, create a view, register caller-owned context objects,
+and load an absolute `QUrl`. Python `activate()`, `deactivate()`, and `load()`
+return `bool`; read `QmlView.lastError()` and observe `errorOccurred` for load
+failures. Keep unparented model wrappers alive or give them a Qt owner.
+
+The [shared-model example](examples/qml_bridge.py) uses the same
+[`Preview.qml`](../../examples/qml_bridge/qml/Preview.qml), layout, controls,
+and model values as C++ and WebAssembly:
+
+```bash
+PYTHONPATH=build/pyside6/python \
+  .venv-pyside/bin/python bindings/pyside6/examples/qml_bridge.py --smoke-test
+```
+
+Stopping the session clears the public scene immediately and releases its
+Quick widget and engine on the next event-loop turn. The view and model stay
+caller-owned, and reactivation requires an explicit reload. QML content binds
+to the read-only `fluentTheme` colors, typography, radii, and motion values.
+The Python Gallery exposes six focused cards under **Plugins → QmlBridge →
+QmlView** when this module is available: loading, Fluent theme tokens, context
+binding, QML actions, lifecycle, and load errors. Each card exports its own
+setup and QML asset; the standalone shared-model panel remains a separate
+application example. See the [Gallery card contract](../../docs/architecture/qml-bridge.md#gallery-example-cards).
+
+`QmlTextureLayer` and the lower-level `QmlView` texture API let a compatible
+OpenGL host compose the existing QML scene into its projected Widgets panel.
+Models, the engine, and local QML state retain their ownership. This path uses
+ordinary Qt Quick items; it has no Qt Quick 3D dependency or Direct3D/Metal
+texture import. See the [composition contract](../../docs/architecture/qml-bridge.md#composition-and-gallery-mode)
+for cache budgets, native fallback, and the Qt 5.15/6.2 DPR restriction.
+
+### Base examples
+
+Run build-tree examples with the generated package on `PYTHONPATH`:
+
+```bash
+PYTHONPATH=build/pyside6/python \
+  .venv-pyside/bin/python bindings/pyside6/examples/hello_world/main.py
+```
+
+| Scenario | Example |
+|---|---|
+| Theme, controls, and signals | [`compatibility_showcase.py`](examples/compatibility_showcase.py) |
+| Native title bar and backdrop | [`window_chrome.py`](examples/window_chrome.py) |
+| Models, delegates, and selection | [`list_view_model.py`](examples/list_view_model.py), [`grid_view_model.py`](examples/grid_view_model.py), [`tree_view_model.py`](examples/tree_view_model.py) |
+| Same-window overlays | [`popup_overlay.py`](examples/popup_overlay.py), [`flyout_overlay.py`](examples/flyout_overlay.py), [`drawer_view_ownership.py`](examples/drawer_view_ownership.py) |
+| Date and time controls | [`date_time_pickers.py`](examples/date_time_pickers.py) |
+| Nullable start/end date-time range | [`date_time_range_picker.py`](examples/date_time_range_picker.py) |
+| Navigation and page ownership | [`navigation_view_ownership.py`](examples/navigation_view_ownership.py), [`tab_view_navigation.py`](examples/tab_view_navigation.py) |
+| Menus and command surfaces | [`command_surfaces.py`](examples/command_surfaces.py) |
+
+The complete Python Gallery is the preferred way to browse every generated
+route and live sample. Its deterministic acceptance mode is:
+
+```bash
+QT_QPA_PLATFORM=offscreen \
+  .venv-pyside/bin/python -m fluentqt_gallery \
+  --verify-catalog --walk-routes
+```
+
+Native backdrop, title-bar, drag, and compositor behavior still require a real
+Windows, macOS, X11, or Wayland session.
+
+Theme and motion preferences use the same native runtime as C++:
+
+```python
+import fluentqt
+
+fluentqt.set_theme(fluentqt.Theme.HighContrast)
+fluentqt.set_motion_mode(fluentqt.MotionMode.Reduced)
+```
+
+`Reduced` keeps short transitions while stopping continuous motion;
+`Disabled` resolves all motion to its final state. A component whose local
+animation switch is off never animates in any global mode.
+
+Application-owned animations can use the same native decisions and observe
+runtime preference changes through the process-wide policy:
+
+```python
+policy = fluentqt.motion_policy()
+policy.modeChanged.connect(lambda mode: print("motion mode:", mode))
+duration = policy.resolvedDuration(250)  # 50 ms in Reduced mode
+animate_spinner = policy.shouldAnimate(
+    True, fluentqt.MotionKind.Continuous
+)
+```
+
+## Public API and ownership
+
+Python uses the same native FluentQt implementation rather than a second widget
+library. The package exposes Python-shaped adapters where raw C++ mixins or
+runtime ownership overloads would produce unsafe Python semantics.
+
+- Application models, selection models, and delegates remain caller-owned;
+  the facade retains their wrappers while installed.
+- Hosted widgets use explicit owned, borrowed, reparented, and take methods
+  where the C++ runtime overload would be ambiguous in Python.
+- Qt-owned children such as title bars and internal scroll bars are borrowed
+  and must not be deleted or reparented by callers.
+- `FluentWidget`, `bind()`, `StateGroup`, and `AnchorLayout` expose supported
+  authoring capabilities without publishing implementation-only mixins or
+  mutable registries.
+
+The [compatibility and coverage guide](ROADMAP.md) records intentional boundary
+decisions. Exact exports remain defined by `api-manifest.json`.
+
+## Maintainer references
+
+| Change | Required reference |
+|---|---|
+| Add or change a public Python API | [API compatibility policy](API_COMPATIBILITY.md) |
+| Change a supported runtime or wheel | [Compatibility and coverage](ROADMAP.md) and [`wheel-matrix.json`](wheel-matrix.json) |
+| Change Linux wheel repair | [manylinux policy](MANYLINUX.md) |
+| Build or publish a release bundle | [Publishing runbook](PUBLISHING.md) |
+| Change Gallery packaging | [Gallery package boundary](gallery/README.md) |
+
+Run the policy gate after changing the public surface:
+
+```bash
+python3 bindings/pyside6/tools/verify_api_policy.py
+```
+
+Do not copy generated API counts or wheel totals into prose. Update the owning
+manifest or matrix and let its validators describe the current state.

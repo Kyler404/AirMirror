@@ -1,0 +1,2 @@
+// Application icon resource (taskbar/title bar/tray all inherit).
+IDI_ICON1 ICON "app.ico"

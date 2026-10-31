@@ -1,0 +1,98 @@
+#ifndef GALLERYCONTENTCATALOG_H
+#define GALLERYCONTENTCATALOG_H
+
+#include <functional>
+
+#include <QString>
+#include <QStringList>
+#include <QVector>
+
+class QWidget;
+
+namespace fluent::gallery {
+
+/**
+ * @brief Right-side page archetype resolved for a Gallery route.
+ * zh_CN: 为 Gallery 路由解析出的右侧页面类型。
+ */
+enum class GalleryPageKind {
+    Home,
+    Category,
+    Component,
+    Foundation, // Foundation landing page with feature cards. zh_CN: 基础落地页（特性卡片）。
+    FoundationTopic, // One foundation topic sub-page (typography/color/...). zh_CN: 单个基础主题子页。
+    Settings
+};
+
+/**
+ * @brief One named source file shown and copied by a Gallery sample.
+ * zh_CN: Gallery 示例中可独立查看与复制的命名源文件。
+ */
+struct GallerySourceFile {
+    QString name;
+    QString language;
+    QString code;
+    QString usageSnippet;
+};
+
+/**
+ * @brief A single live sample: metadata plus a preview/options widget factory.
+ * zh_CN: 单个实样：元数据加上预览/选项控件工厂。
+ *
+ * The factories build live reusable Fluent controls on demand so the catalog can
+ * stay declarative while the component page owns widget lifetime.
+ * zh_CN: 工厂按需构建实时 Fluent 控件，使目录保持声明式，控件生命周期由组件页负责。
+ */
+struct GallerySample {
+    QString id;
+    QString title;
+    QString description;
+    QString codeSnippet;
+    std::function<QWidget*(QWidget*)> createPreview;
+    std::function<QWidget*(QWidget*)> createOptions;
+    // Opt in to using the complete preview row; existing samples retain their right spacer.
+    // zh_CN: 显式选择铺满预览行；既有示例保留右侧留白。
+    bool fillAvailableWidth = false;
+    // Optional focused C++ excerpt; codeSnippet retains the complete example.
+    // zh_CN: 可选的 C++ 核心用法摘录；codeSnippet 保留完整示例。
+    QString usageSnippet;
+    // Additional combinations are disclosed after the primary examples.
+    // zh_CN: 补充组合示例折叠收纳在主要示例之后。
+    bool supplementary = false;
+    // Optional multi-file example; the first file is the host's source.
+    // zh_CN: 可选的多文件示例；首个文件为宿主源码。
+    QVector<GallerySourceFile> sourceFiles;
+};
+
+/**
+ * @brief Right-side page metadata for one Gallery route.
+ * zh_CN: 单个 Gallery 路由的右侧页面元数据。
+ *
+ * Content entries describe what the selected route shows; they intentionally do
+ * not drive left navigation tree structure.
+ * zh_CN: 内容条目描述选中路由展示的内容；刻意不驱动左侧导航树结构。
+ */
+struct GalleryContentEntry {
+    GalleryPageKind kind;
+    QString routeId;
+    QString title;
+    QString description;
+    QString categoryId;
+    QStringList relatedRouteIds;
+};
+
+/**
+ * @brief Returns the complete static Gallery content catalog.
+ * zh_CN: 返回完整的静态 Gallery 内容目录。
+ */
+const QVector<GalleryContentEntry>& galleryContentCatalog();
+
+/**
+ * @brief Resolves the content entry for a route ID, or nullptr when uncovered.
+ * zh_CN: 按路由 ID 解析内容条目，未覆盖时返回 nullptr。
+ */
+const GalleryContentEntry* galleryContentEntry(const QString& routeId);
+
+} // namespace fluent::gallery
+
+#endif // GALLERYCONTENTCATALOG_H

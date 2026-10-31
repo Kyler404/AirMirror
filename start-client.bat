@@ -1,0 +1,4 @@
+@echo off
+REM ????????? client-src/???? build-client.ps1?
+cd /d "%~dp0."
+start "" "%~dp0client\airplay-windows.exe" --log

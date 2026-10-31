@@ -1,0 +1,839 @@
+# Spatial: compose existing widgets in depth
+
+> **Status:** Current guide
+
+<!-- docs-nav:top:start -->
+[Documentation](../README.md) › [Architecture](README.md) › Runtime contracts
+
+[← CodeBlock](code-block.md) · [Contents](../SUMMARY.md) · [Architecture index](README.md) · [Timeline and Stepper →](sequence-controls.md)
+<!-- docs-nav:top:end -->
+
+`Spatial` is an optional extension in `src/components/spatial`, using
+`fluent::spatial` and the installed `<FluentQt/Spatial.h>` header.
+`SpatialSession` provides the application entry point and manages the concrete
+`SpatialPlugin` through the [shared plugin lifecycle](plugins.md).
+Applications can include `<FluentQt/FluentQt.h>` when linked to
+`FluentQt::Spatial`, which publicly links `FluentQt::Plugins` and the base
+Widgets library. The base `FluentQt::FluentQt` target keeps its Widgets-only
+module dependencies.
+
+## Two components, one ordinary widget composition
+
+| Type | Responsibility | How to use it |
+| --- | --- | --- |
+| `SpatialView` | A QWidget viewport with perspective, camera and pointer response | Add it to your normal window layout |
+| `SpatialItem` | Pose and optional surface finish for one widget and all its children | Use the QObject handle returned by `view->addWidget()` |
+
+Build an ordinary `layout::Card` with `basicinput::Button`, `ToggleSwitch`,
+`status_info::ProgressBar` or a chart. Add the complete card to the view. All
+children move together, retaining their normal properties, signals and layouts.
+Add separate cards as separate items when they need independent depth or rotation.
+
+```text
+Normal window layout
+├── Navigation and parameter controls
+└── SpatialView
+    ├── SpatialItem → Card → Label + ToggleSwitch + Button
+    └── SpatialItem → Card → Sparkline + ChartModel
+```
+
+This is useful for a small component showcase, a preview card or a few status
+panels. Keep primary editing, navigation and large data views in normal layouts.
+The API composes planar widgets; it does not load meshes, provide a stereoscopic
+display, or automatically split a widget's paint layers.
+
+`SpatialSession` is a nonvisual QObject that activates the extension and tracks
+its views and particle layers. `SpatialPlugin` is the native plugin implementation;
+its ID is `fluentqt.spatial` and its QWidget factory key is `spatial-view`.
+Existing `SpatialView`, `ParticleLayer`, and `SpatialRuntime` APIs remain
+available for source compatibility. New integrations use the session to share
+activation and cleanup across their Spatial objects.
+
+## Minimal integration
+
+### Ordinary widgets only
+
+Use an installed SDK with this `CMakeLists.txt`:
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(spatial_card LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(FluentQt CONFIG REQUIRED)
+add_executable(spatial_card main.cpp)
+target_link_libraries(spatial_card PRIVATE FluentQt::FluentQt)
+```
+
+This `main.cpp` opens a Fluent window with an ordinary Card and Button:
+
+```cpp
+#include <FluentQt/FluentQt.h>
+#include <QApplication>
+#include <QVBoxLayout>
+
+int main(int argc, char** argv)
+{
+    fluent::prepareHighDpiApplication();
+    QApplication app(argc, argv);
+    fluent::initializeResources();
+    using namespace fluent;
+
+    windowing::Window window;
+    window.resize(640, 420);
+    auto* card = new layout::Card;
+    auto* content = new QVBoxLayout(card);
+    auto* button = new basicinput::Button("Run", card);
+    button->setFluentStyle(basicinput::Button::Accent);
+    content->addWidget(button, 0, Qt::AlignCenter);
+    QObject::connect(button, &basicinput::Button::clicked, button,
+                     [button] { button->setText("Done"); });
+
+    window.setContentWidget(card);
+    window.show();
+    return app.exec();
+}
+```
+
+### The same widgets with Spatial
+
+The SDK must have been built with `FLUENT_QT_BUILD_SPATIAL=ON`. Replace the
+`find_package` and `target_link_libraries` lines with:
+
+```cmake
+find_package(FluentQt CONFIG REQUIRED COMPONENTS Spatial)
+target_link_libraries(spatial_card PRIVATE FluentQt::Spatial)
+```
+
+`FluentQt::Spatial` links `FluentQt::Plugins` and `FluentQt::FluentQt` publicly.
+Enabling Spatial builds its Plugins dependency automatically; a separate
+`FLUENT_QT_BUILD_PLUGINS=ON` flag is unnecessary. It already provides the ordinary
+widgets, so listing all three targets is unnecessary. It also exports
+`FLUENT_QT_HAS_SPATIAL=1`, enabling Spatial in `<FluentQt/FluentQt.h>`; do not set
+that definition manually.
+
+In the same `main.cpp`, activate a session after constructing the Window and
+before constructing its pages:
+
+```cpp
+spatial::SpatialSession spatialSession(&window);
+const bool spatialActive = spatialSession.activate();
+if (spatialActive) {
+    spatialSession.prepareWindow(&window);
+}
+```
+
+Activation prepares the native-style adapter without creating a GPU context.
+Check its result before requesting a view. Window preparation is best-effort:
+its return value does not establish hardware support, and a false result alone
+does not make Spatial unavailable on WebAssembly or offscreen hosts. Replace
+`window.setContentWidget(card);` with:
+
+```cpp
+card->setFixedSize(300, 180);
+auto* view = spatialActive ? spatialSession.createView(&window) : nullptr;
+if (view) {
+    auto* item = view->addWidget(card, WidgetOwnership::Owned);
+    item->setRotation(QVector3D(6, -12, 0));
+    item->setSurfaceIntensity(0.6);
+    view->setMaximumTilt(QPointF(3, 5));
+    window.setContentWidget(view);
+} else {
+    spatialSession.deactivate();
+    auto* flatHost = new QWidget;
+    auto* flatLayout = new QVBoxLayout(flatHost);
+    flatLayout->setContentsMargins(0, 0, 0, 0);
+    flatLayout->addWidget(card, 0, Qt::AlignCenter);
+    window.setContentWidget(flatHost);
+}
+```
+
+The Button and its signal connection are unchanged. Failed activation or a null
+factory result keeps the Card and Button usable in an ordinary centered 2D
+layout. In the successful path, the Window owns the view and the view owns the
+card; the session tracks the view without taking its ownership. For that view,
+`view->setSpatialEnabled(false)` returns the card to a native 2D layout;
+`spatialSession.deactivate()` returns all tracked views to that layout and
+releases their Spatial rendering resources.
+
+Keep the session alive while its Spatial objects are in use. A view subclass
+constructed by the application can join the same lifecycle through
+`spatialSession.attachView(view)`. Create decorative layers with
+`spatialSession.createParticleLayer(backdrop, parent)`; their QObject parent
+continues to determine ownership. Reactivating a session does not automatically
+restore a view's previous 3D presentation. It restores the retained view's
+requested `RenderMode`, while `spatialEnabled` stays false. The application
+explicitly chooses whether to enable 3D after activation.
+
+The session and its host use the GUI thread. Creation, attachment, and window
+preparation require an active session; failure returns null or false.
+Deactivate before dismantling the host, and do not parent the session to a
+tracked view or an object inside that view's subtree.
+
+Build either variant from its directory:
+
+```bash
+cmake -S . -B build -DCMAKE_PREFIX_PATH="/path/to/fluentqt-sdk;/path/to/Qt/kit"
+cmake --build build
+```
+
+For source integration, replace `find_package` with
+`add_subdirectory(path/to/Fluent-QT fluentqt)`. Configure with
+`-DFLUENT_QT_BUILD_SPATIAL=ON` when linking Spatial; leave it off for the base
+variant. The C++ code and target names stay the same. The repository's
+[hello_world](../../examples/hello_world/README.md) provides separate 2D and
+Spatial executable targets, each with its own window implementation. The base
+example contains only a Window and Button. The Spatial variant places the
+Button in a centered Card; its
+[Python counterpart](../../bindings/pyside6/examples/hello_world/README.md)
+uses that composition and configuration. The browser build compiles the same
+C++ Spatial window and stages it at
+`build/wasm/app/hello-world-spatial/index.html`. This minimal app is separate
+from Gallery's `?showcase=spatial` embed with interactive scene controls.
+
+## Try the Gallery
+
+Use **Settings → 3D Gallery** to switch the shell and every Spatial example together.
+Then open **Plugins → Spatial → SpatialView** or
+**Plugins → Spatial → SpatialItem**. The component pages link back to that setting.
+There are no per-example mode switches, and switching modes preserves values and models.
+
+Start with the main examples:
+
+- **SpatialView / Scene perspective**: adjust camera distance, scene zoom and
+  pointer following. The sliders stay outside the projection. Animation and
+  rendering settings keep their defaults.
+- **SpatialView / Two cards at different depths**: a settings card and a
+  Sparkline card have separate poses. The chart retains its ordinary model.
+- **SpatialView / DonutChart and Slider**: drag the slider to update the chart's
+  model and center label inside the projected card.
+- **SpatialView / File preview**: keep the dropdown
+  outside the scene and connect its selection to the projected card.
+- **SpatialItem / Card finish and pose**: the settings card contains just three
+  sliders for surface intensity, Y rotation and Z position. The
+  preview uses a real Sparkline. Settings keep their own pose while dragging;
+  narrow boards stack the cards vertically.
+
+**More component combinations** is collapsed by default. It contains Slider/CheckBox,
+ListView/InfoBadge, CalendarView, SelectorBar with a text preview, RadioButton/Rating,
+a file browser. These examples follow the same setting, including
+when hidden or created after a mode change.
+
+Source code opens on **Key usage**, a short Spatial integration excerpt with
+explicit prerequisites. **Full example** includes the controls, layout, signals
+and ownership. Copy follows the selected source. The file browser reuses the
+Gallery [TreeRowDelegate](../../app/view/widgets/samples/CollectionSampleDelegates.h)
+for its row styling; it is an application delegate, not a Spatial dependency.
+
+## Gallery rendering
+
+### Shared mode and startup
+
+The shared setting opens navigation and content into opposing surfaces while the
+native title bar stays stable. Gallery checks GPU support and creates its shell
+QOpenGLWidget and context only when 3D is enabled. Builds with Spatial default to
+3D on first launch; a saved 2D choice takes precedence and skips GPU initialization.
+Unavailable acceleration falls back to 2D without erasing the saved preference.
+Reduced motion and high contrast also use 2D. The C++, Python and WebAssembly
+Galleries follow the same policy. On native Windows, Cocoa, X11 and Wayland with
+Qt 6.4 or later, Gallery prepares an OpenGL-compatible native window format
+before showing the window. This does
+not create a context or enable GPU composition: ordinary 2D painting still uses
+the raster backing store. It prevents Qt from destroying and recreating the
+visible window when the first QOpenGLWidget is added. The base library and
+2D-only Gallery builds keep their original window setup. The startup Splash and
+logo handoff finish before the shell redirects widget painting.
+
+Desktop C++ and Python Gallery prepare only Home, Settings and the reusable
+loading shell during Splash. The catalog and navigation are available immediately,
+but unvisited component demos are not constructed. Progress counts ready pages,
+not elapsed time. Covered and hidden controls keep their animations stopped.
+Moving or hiding the window pauses startup work; closing cancels pending work.
+
+A cold route shows Shimmer, then builds one sample per event-loop turn. Changing
+routes cancels its unpublished page. Completed pages retain their models and
+interaction state; revisits reuse the same widgets. There is no full-catalog
+background warm-up competing with interactive rendering. QWidget construction
+remains on the GUI thread, so an individually expensive sample can still block
+for its own factory duration. Code highlighting waits for expansion. WebAssembly
+retains its bounded resident cache; desktop retains only the finite visited set.
+
+### Shared session entry and runtime compatibility
+
+`FluentQt::Spatial` exposes `SpatialSession` in C++ and
+`fluentqt.spatial.SpatialSession` in Python. Each session owns an internal
+plugin manager and a registered `SpatialPlugin`; the application does not need
+to assemble that lifecycle manually. `activate()` and `deactivate()` return
+success, `isActive()` reports activation, and `activeChanged(bool)` reports
+changes. All calls use the GUI thread. Activating an already active session or
+deactivating an inactive one is a no-op.
+Activation can fail, and `createView()` or `createParticleLayer()` can return
+null (`None` in Python) even after activation. Check each result before using
+it. Keep ordinary widget content or the particle source's CPU presentation
+available as the fallback.
+
+Session activation and visible 3D presentation are separate states. An active
+session can retain views in native 2D; `isActive()` does not report GPU
+availability or replace a view's `spatialEnabled` and `activeBackend` state.
+
+Activation installs the native-style adapter before building application pages.
+`createView()` and `attachView()` register views for cleanup;
+`createParticleLayer()` registers decorative layers. Deactivation returns
+tracked views to flat raster presentation and releases their rendering and
+particle-layer resources. Caller widgets, view content, and models survive.
+Session destruction applies the same cleanup. A later activation restores each
+retained view's requested Auto, Raster, or OpenGL render mode, while leaving
+`spatialEnabled` false for the application to resolve. Activation creates no
+particle-layer GPU resources; rendering continues to require the compositor's
+current hardware context.
+
+The shared manager's dependency-graph work and Spatial's tracked-object work
+have separate costs. Spatial cleanup visits its views and particle layers and
+requests their renderer/resource transitions. A session with many surfaces can
+therefore take more work to suspend than a session with one surface, even though
+both register one Spatial plugin. Rendering, input-driven deferred transitions,
+and resource release retain their component contracts; plugin activation tests
+do not measure those costs across platforms.
+
+`session.prepareWindow(&window)` prepares a hidden Fluent Window before it is
+shown. The one-argument form prepares for OpenGL; the overload taking
+`QSurface::SurfaceType` prepares for the application's chosen graphics API.
+Gallery's private TextureHost retains its RHI/Direct3D backend selection.
+Preparation is idempotent and refuses visible windows. Neither
+activation nor preparation creates a GPU context or device. Actual acceleration
+is confirmed only after the real surface has initialized; a preparation result
+is not a hardware-availability verdict. Call preparation after successful
+activation and while the window is hidden. Native-surface preparation can be
+unavailable on WebAssembly or offscreen hosts while the Spatial view remains
+usable; the minimal examples treat preparation as best-effort.
+
+`SpatialRuntime` and its Python binding remain available. They own the shared
+renderer classification, display capability, preflight, texture-limit, and
+native text-coverage helpers used by Gallery and SpatialView. Existing calls to
+`SpatialRuntime::prepareApplication()` and `prepareWindow()` remain compatible;
+new consumers enter through `SpatialSession`. Gallery owns the one 3D preference
+and its presentation/controller; UILib does not read or rewrite those settings.
+The C++, Python, and WebAssembly Galleries and minimal examples use the same
+session entry while retaining their renderer and fallback policies.
+
+OS/Qt differences live in `src/compatibility/private/spatial/SpatialRenderCompat_p.h` and the
+private native-style adapter. Cocoa still needs CGContext primitive adaptation.
+Windows, Cocoa, X11 and Wayland probe hardware OpenGL before exposing a Gallery
+or standalone SpatialView GPU child, so an unavailable driver cannot break the
+parent window's 2D painting. SpatialView reuses a successful probe across temporary
+clipping changes and probes again after an explicit rendering-policy change.
+Qt 6.4+ desktop windows need hidden surface
+preparation. Measured low-DPI font-coverage adapters differ by QPA/DPR. These
+are implementation capabilities behind the same business flow, not separate
+macOS/Windows/Linux Gallery policies.
+
+### GPU textures and sampling
+
+The shell redirects widget painting into two cached GPU textures through an
+OpenGL painter. Content changes redraw the affected surface; pointer motion reuses
+the textures. It does not capture and upload a full-page CPU bitmap each frame.
+The panels share a multisampled paint target and a matching resolve target. Each
+dirty panel is painted there, resolved, then copied into its own RGBA texture for
+perspective composition. The intermediate resolve keeps sample rectangles and
+formats identical, as required by WebGL. This applies
+antialiasing to control curves and glyph outlines before they become a texture.
+Antialiasing on the final window alone cannot repair aliased cached artwork.
+
+When a panel spans several paint strips, `QWidget::render` carries the integer
+strip offset so nested graphics effects clip in the same coordinates as ordinary
+widgets. The painter transform carries only fractional pixel alignment. The root
+capture effect cancels Qt's repeated source offset. This keeps StackView fades,
+TabView label reveals and embedded SplashScreen dismissal continuous across strip
+boundaries. StackView and SplashScreen bypass their opacity effect at full opacity,
+as TabView already does, to keep the uncached first frame in place.
+
+The OpenGL shell caches use up to twice the output density below DPR 2 and
+1.5 times the output density on denser displays. High-DPI text retains sampling
+headroom without exhausting the shared paint budget on oversized textures and
+many narrow paint strips. The final window always uses native output density.
+The composition shader reconstructs nearby texels with a bounded Catmull-Rom
+cubic filter to reduce the softening of already-antialiased text. It reads a
+4-by-4 neighborhood and clamps the result to the four central texels' color
+range, then preserves the premultiplied-alpha constraint. This retains detail
+without introducing bright halos or invalid transparent edges. When one output
+pixel spans 1.75 to 2.5 source texels, it smoothly blends back to the existing
+four-tap footprint filter; stronger minification uses that filter alone to
+retain continuous coverage of thin strokes. The C++/Python OpenGL compositors
+and the QRhi panel shader share this reconstruction policy.
+
+The filter keeps the same cache budget and adds no image pass or widget repaint.
+It uses 16 texture reads for detail reconstruction, four for strong minification,
+and both in the transition range. The app-private sampler retains its previous
+monotone and linear footprint filters only for same-context regression and
+performance comparisons, not as user settings. No full-screen blur or sharpening
+pass is applied. Perspective still moves strokes off the pixel grid, so projected
+text cannot be pixel-identical to axis-aligned 2D text.
+Large glyphs that Qt paints as outlines receive the same multisample coverage
+as curved controls.
+
+The rounded panel boundary, material and one-logical-pixel rim share the same
+signed-distance coverage in the composition shader. Screen-space derivatives
+adjust edge coverage under perspective. This avoids independently filtering a
+cached rounded mask and a second transformed border, which can create a broken
+or doubled thin edge. It does not change the panel geometry or cache density.
+
+On Windows at output DPR 1 to below 2, and Linux at DPR 1, the Gallery uses Qt's raster glyph
+coverage with a private paint-device adapter. It rasterizes Qt's already-shaped
+text items into bounded, transparent tiles during dirty-cache updates, including
+particle-layer foreground text. Unhinted fonts use the actual panel-cache density
+to avoid enlarging low-density antialiased glyphs before perspective sampling.
+Hinted fonts retain the native output grid so their grid fitting and small-text
+contrast do not change. This private policy uses each shaped item's font, not an
+application-wide font or a new platform branch. Shaping,
+fallback fonts and bidi ordering are not repeated. Geometry and images still
+paint through OpenGL; transformed or patterned text retains Qt's original path.
+The low-DPI OpenGL Gallery surface (`GpuSurface` in C++, `_Surface` in Python)
+retains exact raster tiles in a bounded image cache so Qt can reuse their texture
+keys. The RHI surface does not use this cache. The key covers raster pixels, dimensions and
+density, with an exact image comparison before reuse; Qt's existing text pipeline
+retains shaping and fallback-font selection. The cache is released when
+leaving 3D or losing the GL context. There is no whole-window CPU capture. Cocoa,
+WebAssembly, Linux fractional DPR and output DPR 2 or higher keep the original glyph path.
+The adapter reuses an unchanged device-space clip across drawing primitives;
+clip or transform changes invalidate it while retaining the caller's painter
+state. This avoids repeated stencil setup in Debug without caching shaped text.
+Its paint-engine capability mask must match the target engine. In particular,
+advertising raster operations to an OpenGL delegate makes Qt's text editors
+select an unsupported XOR caret path. C++ and Python adapters preserve the
+delegate's capabilities; native input regressions exercise focus, caret blink,
+selection, IME commit, suggestion acceptance and item-editor commit in 3D.
+
+### Cache budget
+
+The two panel textures, native-density backdrop texture, and shared paint and resolve
+targets have a combined 192 MiB estimated budget: four bytes per resolved pixel and twelve bytes per paint sample,
+allowing for separate color, depth and stencil storage. The actual sample count is queried
+before allocating large targets. Large panels paint in horizontal strips into a
+shorter shared target; only children intersecting each strip are rendered. Only
+the used width and height of each strip are resolved, including narrow navigation
+panels and the last partial strip. This keeps the antialiasing buffer within
+budget without reducing the selected text density. The
+low-DPI native glyph adapter also reserves 512 KiB for one bounded CPU tile and
+its upload. The OpenGL retained-image cache has a hard 2 MiB CPU limit, including
+a fixed metadata charge for each admitted image. A further 2 MiB is a conservative
+planner reservation for texture copies, not an enforced limit on Qt's texture
+cache. These reservations stay inside the same 192 MiB plan; the RHI path has no
+retained glyph-image cache.
+Native-density backgrounds are uploaded only when their content,
+size, DPR or OpenGL context changes, not on each pointer-motion frame.
+The planner also checks texture, renderbuffer and viewport limits. It selects
+the highest extra-sampling level within the display's sampling policy, in quarter
+steps, that fits the panel textures, paint strip and eligible particle targets
+together. It never renders below the
+window's native pixel density, and the final canvas keeps its native DPR.
+Allocation failures retry smaller caches. If even native density cannot fit,
+Gallery returns to 2D; the GPU remains available for another attempt after resizing
+or freeing resources. This budget excludes Qt's final window framebuffer and
+other application/GPU resources.
+
+The paint target requests 2x MSAA; the final surface retains its existing MSAA.
+The paint and resolve targets, both panel caches, and backdrop texture are released
+on return to 2D. The C++, Python and WebAssembly shells
+use the same policy. Web keeps native output resolution by default; a lower
+resolution remains an explicit choice.
+
+For a native comparison, `FLUENT_QT_SPATIAL_BENCHMARK=1` enables frame and capture
+counters. With that flag, `FLUENT_QT_SPATIAL_EXTRA_SAMPLING` can temporarily cap
+extra sampling from 1 to 2. `FLUENT_QT_SPATIAL_SAMPLER=monotone` selects the
+previous sampler for a same-binary comparison. Both overrides are ignored during
+ordinary use. Frame-swap counts measure renderer submissions, not frames shown
+by the monitor. Keep particle animation active during the comparison and compare
+frame intervals and widget capture work alongside the text-detail regressions.
+
+### Gallery particle layers
+
+Particle acceleration follows the existing **Settings → 3D Gallery** state.
+There is no independent renderer setting or persisted particle-acceleration
+preference. Only an exposed, hardware-backed 3D shell requests acceleration.
+
+`ParticleBackdrop::setGpuAccelerationEnabled(bool)` is a component-level
+request, false by default. Setting it does not create a context or add OpenGL
+to the base library. A capable optional `ParticleLayer` host is still required;
+otherwise normal CPU painting continues. The Gallery compositor scopes the
+request to its active sources and restores their prior request on release.
+Visibility, simulation and reduced-motion policy remain separate.
+
+The GPU path borrows the same particle state and the shell's current context.
+Particle ticks update a separate native-density texture; unchanged page content
+can retain its static cache. A cached transparent foreground preserves QWidget
+stacking, text coverage and translucent content without painting them twice.
+Foreground changes refresh that cache. This does not move particle simulation
+to a compute shader or increase the component's configured animation rate.
+
+Particle targets and composition textures share the same 192 MiB shell budget.
+Before allocating the shell's paint target, the planner estimates visible particle
+targets using the driver's actual sample count and reserves their output and
+foreground textures. It shortens the temporary paint strip first, then tries the
+next internal sampling level with recalculated texture costs. Candidate estimates
+leave active GPU targets intact; only a changed selected plan reallocates them.
+If no joint plan fits at native density or above, particles retain CPU rendering.
+Foreground capture borrows the existing
+multisample and resolve targets. Unsupported masks or graphics effects retain CPU rendering;
+allocation or rendering failure, loss of the context, and return to 2D release
+acceleration without resetting the particle effect's phase.
+A failed allocation is not retried on every animation tick; source, geometry,
+context, request or budget changes allow another attempt. Pixel-only revisions
+do not traverse the widget tree again: geometry, visibility and child changes
+invalidate the visible-source list; known candidates still revalidate masks,
+effects and clipping when their content changes. Hidden pages do not acquire
+particle textures.
+
+### macOS paint adapter
+
+On macOS, a paint adapter is installed before Gallery creates its pages, without
+creating an OpenGL context. First enabling 3D reuses that adapter, avoiding an
+application-wide style change and layout pass over all prewarmed pages. Native
+style primitives that require CGContext use raster images.
+Frames, buttons and base style options are painted in a local rectangle so a
+small primitive far from the widget origin does not allocate a widget-sized
+image. Other native option types retain their original coordinates. The rest of
+the widget tree paints into the GPU texture. Transparent hosts retain their
+background rather than acquiring a forced palette fill.
+
+### Returning to 2D
+
+Returning to 2D stops capture and input redirection, clears cached textures, and
+hides the GPU surface for reuse. After the first opt-in, Qt may retain the window's
+GL composition resources until it closes. Live widgets keep their parents, focus
+and values. Reduced motion and high contrast select 2D. Shell angles, animation
+timing and antialiasing choices belong to
+[`GallerySpatialController.cpp`](../../app/view/shell/GallerySpatialController.cpp),
+not the library's API contract.
+
+`SpatialView` uses a regular widget viewport under an ancestor graphics effect,
+avoiding nested OpenGL surfaces while keeping controls and 3D poses live. In the
+Gallery shell that viewport paints through the outer OpenGL painter, so its
+perspective transform needs no intermediate full-page CPU bitmap. A
+regular raster capture in another application still uses software painting. It also
+releases its GPU viewport while hidden or fully clipped and restores it when
+visible. The view manages this itself; applications need no visibility/backend
+adapter.
+
+`renderMode()` remains the requested policy; `activeBackend()` identifies the
+view's own viewport. Under Gallery composition, `Raster` denotes its regular
+widget viewport, whose redirected painter uses the outer GPU surface. A standalone
+visible view can use its own OpenGL viewport normally.
+
+Tab/Escape in a Gallery scene restores 2D throughout the Gallery for native input.
+The original Home Hero remains intact. Web Gallery uses the same compositor
+through WebGL and falls back to 2D if the renderer is unavailable. It checks the
+actual canvas context instead of creating an offscreen desktop OpenGL probe.
+See the [browser validation workflow](../development/webassembly-workflow.md#spatial-webgl-validation).
+
+### Python bindings
+
+Python source builds can enable `fluentqt.spatial`; see the
+[binding guide](../../bindings/pyside6/README.md#optional-spatial-module) and
+[coverage reference](../../bindings/pyside6/ROADMAP.md#spatial-composition).
+Python applications use `fluentqt.spatial.SpatialSession` to activate the
+extension and create or attach its views. Generic extension authoring and
+registration are available through `fluentqt.plugins`. Python applications can
+also register `fluentqt.spatial.SpatialPlugin` with a generic manager when
+Spatial belongs in a larger dependency graph. `SpatialSession` owns that
+registration for ordinary independent scopes. Existing SpatialView, SpatialItem,
+ParticleLayer, and SpatialRuntime bindings remain available. Python calls
+configure the same C++ scene and connect ordinary widget signals; projection,
+caching and pointer animation stay in C++.
+
+### Window materials and overlays
+
+Mica/Acrylic and 3D have separate responsibilities: the window backdrop supplies
+the bottom material, while the 3D compositor positions the navigation and content
+surfaces above it. Their translucent areas and gutters reveal that backdrop;
+opaque cards cover it. The compositor does not add another desktop blur.
+On Windows, ordinary runtime backdrop changes do not replay the first-show
+non-client deactivation/activation repair. First exposure and native-window
+repair still keep their existing platform handling.
+Switching a composited material to Solid first publishes the opaque paint state.
+Both Gallery controllers invalidate their backdrop and panel caches from that
+actual state, not only from the later application-setting signal. Windows commits
+the replacement frame before removing the old DWM material; suspended or hidden
+windows defer removal until they can present. The private compatibility helper
+owns this platform fence. There is no fixed waiting period or permanent opaque
+overlay; an exposure paint can finish the handoff on the next event-loop turn.
+
+Anchored popups use the presented anchor rectangle before choosing a side or
+clamping to the available area. Menus map their invocation point once, while
+native submenus keep Qt's placement. The transforms are cleared on return to
+2D. These are Gallery presentation mappings, not new ownership or modality
+rules: centered dialogs, window-edge drawers and their scrims remain attached
+to the native window. See [overlay behavior](overlay-behavior.md).
+Intro and other modal overlays stay above the compositor. Intro freezes pointer
+following and maps its spotlight and CoachMark anchor to the displayed panel
+bounds, using the active Left or Top navigation.
+
+## Ownership and component composition
+
+Hosted content inherits the view's local theme, while explicit content overrides
+remain intact. Releasing content removes the temporary theme bridge.
+
+`surfaceIntensity` adds a soft shadow and edge light around an intact rectangular
+Card. `hoverLift` briefly raises it on pointer hover, without changing `position`.
+The lift freezes while a button is held or a slider is dragged. Both effects
+exist only in 3D; returning to 2D preserves the original Fluent widgets. Shadow
+masks are cached and idle cards do not require an animation loop.
+
+A Card's children share one plane. Do not register its already-hosted children
+again as independent items. For a chart, `setModel()` still borrows its model;
+Spatial does not change that contract. Parent an example model to its card if
+both should share a lifetime.
+
+The view owns each SpatialItem. `Borrowed` content is detached on release,
+`Owned` content is deleted, and `Reparented` content returns to its original
+parent without restoring the original layout slot. `takeWidget()` deletes the
+item and transfers a parentless widget to the caller. Unsupported content
+returns null without transferring ownership.
+
+`setSpatialEnabled(false)` preserves the same controls and values, arranging
+them in a native scrollable vertical layout. It does not reconstruct the
+caller's previous custom grid. Keep a visible mode switch outside the scene.
+Use 2D for text entry, popups and platform accessibility; native-window and
+OpenGL child widgets cannot be embedded.
+
+Fluent anchored overlays, including chart readouts, use the shared
+[overlay presentation mapping](overlay-behavior.md#geometry). A projected
+card is not their clipping window: they are placed in the actual owning
+window, including when the Gallery shell also has a transform. Popups remain
+untransformed, readable overlays. This fixes placement and containment; it
+does not make projected proxy geometry an IME or screen-reader contract.
+
+## Which components can use 3D?
+
+Spatial transforms an existing QWidget subtree. Review the interactions you
+need as well as whether the content can be embedded:
+
+| Content | Current scope |
+| --- | --- |
+| Card, Label, Button, ToggleSwitch, CheckBox, Slider, RadioButton, RatingControl | Small painted compositions; projected pointer interaction is exercised in Gallery |
+| ListView, TreeView, CalendarView, SelectorBar, StackContentHost | Small examples support selection, expansion, dates and tabs; keep editing and large datasets in native layouts |
+| Sparkline, DonutChart | Existing caller-owned models drive the same views; other chart types use the shared renderer but require their own scenario review |
+| LineEdit, text editors, ComboBox, menus, pickers, flyouts and dialogs | Keep IME, popup placement and keyboard-heavy workflows in the normal 2D layout; connect them to the 3D preview as the hybrid sample does |
+| Native child windows, QOpenGLWidget, paint-on-screen surfaces | Rejected by `addWidget()`; this also applies when nested inside a card |
+| SpatialView nested inside SpatialView; entire Window or NavigationView shells | Outside the supported composition scope |
+| Models, themes, animations and other non-widget helpers | Continue using their normal APIs; they have no surface to transform |
+
+Compatibility evidence covers only this tested subset. Qt also documents
+limitations for proxy widgets with an OpenGL viewport:
+[QGraphicsView](https://doc.qt.io/qt-6/qgraphicsview.html).
+
+## Public parameters
+
+The website [API reference](https://calvinhxx.github.io/Fluent-Qt/api/?q=Spatial)
+provides a collapsible parameter list generated from the public header comments.
+These defaults belong to UILib; the example presets deliberately change some
+of them. Slider ranges are convenient review ranges, not the full API limits.
+
+| Scope | Parameter | Default | Meaning |
+|---|---|---|---|
+| Item | `position` | `(0, 0, 0)` | Pivot position in logical pixels relative to view center; X right, Y down, Z toward camera |
+| Item | `rotation` | `(0, 0, 0)` | X/Y/Z degrees, applied in that order |
+| Item | `scale` | `1` | Uniform scale, clamped between 0.05 and 8 |
+| Item | `pivot` | `(0.5, 0.5)` | Normalized content anchor and rotation origin, each axis clamped between 0 and 1 |
+| Item | `visible` | `true` | Visibility in both spatial and native layouts |
+| Item | `surfaceIntensity` | `0` | Rounded-card shadow and edge light, clamped between 0 and 1; 3D only |
+| Item | `hoverLift` | `0` | Temporary upward hover offset, clamped between 0 and 16 logical pixels; freezes during input |
+| View | `cameraDistance` | `1000` | Perspective distance in logical pixels, clamped between 100 and 10000 |
+| View | `zoom` | `1` | Whole-scene magnification, clamped between 0.1 and 4 |
+| View | `pointerTrackingEnabled` | `true` | Pointer-driven scene tilt |
+| View | `maximumTilt` | `(10, 16)` | Maximum pointer pitch/yaw in degrees, each clamped between 0 and 45 |
+| View | `responseTime` | `140 ms` | Exponential follow time constant, 0 immediate; clamped between 0 and 1000 |
+| View | `maximumFrameRate` | `60` | Pointer animation update cap, clamped between 15 and 120; not measured display FPS |
+| View | `cacheEnabled` | `true` | Cache widget surfaces and repaint changed content |
+| View | `renderMode` | `Auto` | Auto, raster, or OpenGL request; unavailable OpenGL falls back |
+| View | `spatialEnabled` | `true` when permitted | Switch between perspective and native vertical layout |
+
+Read-only `activeBackend`, `rendererName`, and `fallbackReason` report the
+actual rendering path after the window is exposed. `projectedPolygon()` gives
+current corners in view coordinates. Non-finite numeric inputs are ignored;
+unchanged values emit no change signal. Use the item's visibility property
+instead of hiding its root widget directly.
+
+Start with position, rotation and maximumTilt. See the public API reference
+for advanced pivot, backend and cache settings.
+
+## Rendering and dependency boundary
+
+Spatial is off by default in source builds. Enable it with
+`-DFLUENT_QT_BUILD_SPATIAL=ON`; the development and Gallery packaging presets opt
+in explicitly. Spatial automatically builds and links the shared Plugins module,
+even when the standalone Plugins build option is off. Setting Spatial to `OFF`
+also builds a 2D-only Gallery without Spatial routes or an OpenGL canvas.
+
+An ordinary `find_package(FluentQt CONFIG REQUIRED)` loads only the base target,
+even when the SDK contains Spatial. It does not load Plugins or discover Qt
+OpenGLWidgets. `COMPONENTS Spatial` loads both the Spatial target and its Plugins
+dependency; consumers do not need to request both components.
+Qt itself may still link platform graphics libraries through QtGui, as it did
+before Spatial; this split removes the additional Qt OpenGL module dependency.
+A Spatial-enabled application must still deploy its Qt OpenGL runtime libraries;
+CPU fallback cannot repair a missing loader dependency.
+
+### How Gallery links Spatial
+
+[CMakePresets.json](../../CMakePresets.json) enables
+`FLUENT_QT_BUILD_SPATIAL` in the Gallery development and packaging presets.
+The root build then creates `FluentQt::Spatial` through
+[FluentQtSpatial.cmake](../../cmake/FluentQtSpatial.cmake).
+[app/CMakeLists.txt](../../app/CMakeLists.txt) conditionally links it to both
+`FluentQtGalleryCore` (the object library) and `fluent_qt_gallery` (the executable).
+The Spatial target supplies the Plugins dependency transitively. Gallery creates
+a `SpatialSession` for its host and attaches its sample views to that lifecycle.
+When Spatial is off, Gallery compiles its 2D fallback and omits Spatial samples.
+
+Gallery also links `Qt6::OpenGLWidgets` directly to its core on Qt 6 because its
+OpenGL compositor uses `QOpenGLWidget` itself. Applications that only use
+SpatialView do not need this extra CMake line. The component samples use
+SpatialView; the Gallery shell has a separate compositor. Both follow the one
+Settings mode. The shell compositor remains Gallery application code, not a
+public Spatial API.
+
+The [Python Gallery](../../bindings/pyside6/gallery/README.md#spatial-mode)
+follows the same boundary: `fluentqt.spatial` supplies the native SpatialSession,
+SpatialView, and SpatialItem bindings, while a Python shell controller owns the canvas,
+projected input and overlay ordering. Its Settings switch drives both
+the shell and the same eleven live examples. The C++, Python and WebAssembly
+Galleries share their sample catalog and display complete Python example source.
+Installing only the base Python binding leaves Spatial routes and Qt OpenGL
+imports out of the Gallery runtime.
+
+Gallery requires acceleration for its whole-window composition. It checks the
+renderer before creating the canvas and again after the real canvas initializes.
+Unavailable/software rendering or context loss restores the original native 2D
+widgets and stops both transition and pointer animations. The Settings switch
+shows the effective availability. All Spatial examples follow that effective
+mode; the saved preference remains available when acceleration returns. Set `FLUENT_QT_GALLERY_DISABLE_3D=1` to
+start in 2D without creating a shell OpenGL canvas for troubleshooting.
+
+### Windows ARM graphics backend
+
+With Qt 6.7 or newer, Windows ARM64 Gallery uses Direct3D 11 through a private
+native QRhi compositor shared by C++ and Python. Other release platforms retain
+their OpenGL path; WebAssembly continues to use WebGL. The shader sources and
+precompiled shader packs live in `support/spatial/shaders`. Qt Shader Tools
+is needed only when editing these shaders, not to build or run the checked-in
+sources:
+
+```bash
+qsb --qt6 --qsbversion 64 -o panel.vert.qsb panel.vert
+qsb --qt6 --qsbversion 64 -o panel.frag.qsb panel.frag
+```
+
+The application renderer uses Qt's private GUI headers for QRhi and is rebuilt
+with its Qt kit. `support/spatial/SpatialTextureHost` retains the shared C++ and
+Python host interface, scene callbacks and renderer policy. Its private backend
+in `src/compatibility/private/spatial/renderer/` owns Qt RHI availability,
+platform selection and the unavailable-backend implementation. Both are built
+only by `FluentQtSpatialRenderer`.
+
+The renderer is not part of the installed SDK; the public Spatial target
+keeps its existing dependencies. The base Widgets target and the minimum Qt
+version are unchanged. No Qt Quick, Qt3D, or separate rendering
+library is required. Windows 11 supplies the native Direct3D shader compiler.
+
+The compositor rejects software devices and checks the real canvas after the
+driver probe. If Direct3D is unavailable, Gallery tries its existing OpenGL path;
+if neither is usable, the same native widgets remain available in 2D. When
+QmlBridge is enabled, this fallback also requires a compatible Quick backend.
+Quick already using Direct3D or Metal keeps that API and the Gallery uses 2D.
+
+Widget contents are captured into textures only when their revision, size or
+pixel density changes. Perspective, rounded edges and material animation run on
+the GPU. CPU captures, queued uploads, textures and render targets share a
+192 MiB estimate; oversampling can decrease to native display density. The
+Direct3D path currently paints particle contents through the existing CPU
+widget path, while OpenGL retains its specialized particle compositor.
+
+For native backend regression work, `FLUENT_QT_SPATIAL_BACKEND=rhi` selects
+Direct3D on Windows or Metal on macOS. `opengl` selects the established backend.
+Metal is a validation path, not the default macOS Gallery renderer. A log entry
+under `fluentqt.spatial.renderer` names the initialized hardware backend and
+adapter. A successful launch or 2D fallback alone is not a 3D acceptance result.
+
+### Library rendering
+
+The library maps each widget's rectangle through rotation, translation, and
+perspective, then applies the resulting projective transform to a private
+Qt Graphics View proxy. Qt maps pointer input back to the live widget. With
+OpenGL, cached surfaces are composed by Qt's OpenGL paint engine. Widget
+painting, layout, input handling, and transform calculation still use CPU time.
+
+Only the optional Spatial target requires OpenGL support. Qt 6 uses
+`OpenGLWidgets` and its transitive `OpenGL` dependency. Qt 5.15
+uses `QOpenGLWidget` from `Widgets`; no legacy QtOpenGL module is required.
+No Qt Quick, Qt3D, or third-party rendering library is added. OpenGL viewport
+creation waits until SpatialView is visible with 3D enabled. Constructing hidden
+pages or configuring their contents does not change the host's native surface.
+The source uses the Qt 5.15 / 6.2 API boundary; passing the current host checks
+does not replace the other Qt/platform CI lanes.
+
+Auto selects raster for offscreen/minimal/VNC, failed context initialization,
+or known software OpenGL renderers. `FLUENT_QT_SPATIAL_RENDERER=raster` overrides
+Auto for diagnostics. Explicit OpenGL requests also fall back on failure.
+Raster describes this view's drawing path, not the operating system compositor.
+No global Qt attributes, surface format, or pixmap cache limit are changed.
+
+Pointer motion stops once settled, when hidden, or when the application loses
+activation. A held pointer interaction freezes the transform; backend and
+presentation changes wait until that interaction finishes. Camera-plane
+crossings and degenerate projections are hidden instead of drawing invalid
+geometry. Overlapping planes are ordered by their transformed center depth;
+intersecting meshes, volumetric lighting, and stereoscopic displays are outside
+this component's scope.
+
+## Native layout and review boundary
+
+`setSpatialEnabled(false)` moves the same widgets into a native scrollable
+vertical layout. Values and objects survive the transition. Tab/Backtab/Escape
+from the scene, reduced/disabled motion, and high contrast select this mode.
+Returning to full motion does not automatically re-enable spatial presentation.
+Applications should expose a visible mode switch, as the example does.
+
+Use native mode for text input, popups, and platform assistive technology.
+Widgets with native windows, paint-on-screen behavior, or embedded OpenGL
+children are rejected. Add such application content outside SpatialView.
+Small pointer-driven card compositions are the intended scope; complex forms,
+large model/view collections, and arbitrary overlay trees need separate review.
+
+Focused contracts live in
+[TestSpatialView.cpp](../../tests/components/spatial/TestSpatialView.cpp):
+
+```bash
+python3 tools/dev/fluent_qt_build.py --preset vcpkg-osx --target test_spatial_view
+ctest --preset vcpkg-osx -L '^test_spatial_view$' --output-on-failure
+```
+
+Native visual acceptance is still human-required. Inspect light/dark, normal
+and narrow windows, real control input, parameter changes, and the mode switch.
+Qt 5.15, Windows, Linux, screen readers, and IME require their own runtime
+evidence before broad compatibility claims. The Web build has a separate
+[WebGL runtime check](../development/webassembly-workflow.md#spatial-webgl-validation)
+for pointer input, idle rendering, mode changes, and software-renderer fallback.
+
+For Python, run `bindings/pyside6/tools/benchmark_spatial.py --output <directory>`
+with a Spatial-enabled package in a native desktop session. It records the
+renderer, frame submission intervals, process CPU time, and idle frame count.
+Keep the benchmark window active and run one workload at a time. A single-card
+measurement and the whole Gallery compositor have different costs; compare
+matching workloads, window sizes, and device pixel ratios.
+
+## Run the Gallery
+
+```bash
+python3 tools/dev/fluent_qt_build.py --preset vcpkg-osx --target fluent_qt_gallery
+open "build/vcpkg-osx/app/Fluent-Qt Gallery.app"
+```
+
+Enable **Settings → 3D Gallery**, then open **Plugins → Spatial → SpatialView** or
+**Plugins → Spatial → SpatialItem**. The one Gallery setting controls its shell
+and Spatial examples. Other native hosts use their configured preset. The Gallery
+owns the interactive examples; `examples/hello_world` is the minimal library
+consumer.
+
+<!-- docs-nav:bottom:start -->
+---
+[← CodeBlock](code-block.md) · [Contents](../SUMMARY.md) · [Architecture index](README.md) · [Timeline and Stepper →](sequence-controls.md)
+<!-- docs-nav:bottom:end -->

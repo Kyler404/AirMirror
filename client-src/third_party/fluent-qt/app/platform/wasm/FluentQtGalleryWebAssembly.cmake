@@ -1,0 +1,63 @@
+include_guard(GLOBAL)
+
+function(fluent_qt_configure_gallery_webassembly target source_dir)
+    if(NOT EMSCRIPTEN)
+        message(FATAL_ERROR
+            "fluent_qt_configure_gallery_webassembly requires Emscripten")
+    endif()
+    set(_adapter_dir "${source_dir}/platform/wasm")
+    target_sources(${target} PRIVATE
+        "${_adapter_dir}/GalleryApplication.cpp"
+        "${_adapter_dir}/GalleryComponentPreview.cpp"
+        "${_adapter_dir}/GalleryComponentPreview.h"
+        "${_adapter_dir}/GallerySpatialShowcase.cpp"
+        "${_adapter_dir}/GallerySpatialShowcase.h"
+        "${_adapter_dir}/GalleryPlatform.cpp"
+        "${_adapter_dir}/WasmSmokeRunner.cpp"
+        "${_adapter_dir}/WasmSmokeRunner.h")
+    target_link_libraries(${target} PRIVATE FluentQt::WebAssembly)
+    if(TARGET FluentQtSpatial)
+        target_link_libraries(${target} PRIVATE Qt6::OpenGLWidgets)
+    endif()
+    if(TARGET FluentQtQmlBridge)
+        target_link_libraries(${target} PRIVATE Qt6::Quick Qt6::QuickWidgets)
+    endif()
+    set_target_properties(${target} PROPERTIES
+        QT_WASM_INITIAL_MEMORY "128MB"
+        QT_WASM_MAXIMUM_MEMORY "512MB")
+
+    file(SHA256 "${source_dir}/assets/app-icon.png" FLUENT_QT_GALLERY_ICON_HASH)
+    string(SUBSTRING "${FLUENT_QT_GALLERY_ICON_HASH}" 0 12 FLUENT_QT_GALLERY_ICON_HASH)
+    configure_file("${source_dir}/assets/app-icon.png"
+        "${CMAKE_CURRENT_BINARY_DIR}/app-icon.png" COPYONLY)
+    configure_file("${_adapter_dir}/index.html.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/gallery-index.html" @ONLY)
+    set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
+        "${_adapter_dir}/index.html.in" "${_adapter_dir}/VersionGalleryAssets.cmake")
+    add_custom_command(TARGET ${target} POST_BUILD
+        BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/index.html"
+        COMMAND "${CMAKE_COMMAND}"
+            "-DWEB_DIR=$<TARGET_FILE_DIR:${target}>"
+            "-DTEMPLATE=${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/gallery-index.html"
+            -P "${_adapter_dir}/VersionGalleryAssets.cmake"
+        VERBATIM)
+    configure_file("${_adapter_dir}/licenses.html.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/licenses.html" @ONLY)
+    configure_file("${PROJECT_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_BINARY_DIR}/FluentQt-LICENSE.txt" COPYONLY)
+    configure_file("${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+        "${CMAKE_CURRENT_BINARY_DIR}/THIRD_PARTY_NOTICES.md" COPYONLY)
+    configure_file("${PROJECT_SOURCE_DIR}/third_party/fonts/noto-sans-sc/LICENSE.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/NotoSansSC-LICENSE.txt" COPYONLY)
+    configure_file("${PROJECT_SOURCE_DIR}/third_party/runtime/qt/LICENSE.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/Qt-LICENSE.txt" COPYONLY)
+
+    get_filename_component(_emscripten_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    set(_emscripten_license "${_emscripten_dir}/LICENSE")
+    if(NOT EXISTS "${_emscripten_license}")
+        message(FATAL_ERROR
+            "Could not find the Emscripten license beside ${CMAKE_CXX_COMPILER}")
+    endif()
+    configure_file("${_emscripten_license}"
+        "${CMAKE_CURRENT_BINARY_DIR}/Emscripten-LICENSE.txt" COPYONLY)
+endfunction()

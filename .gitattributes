@@ -1,0 +1,14 @@
+# 统一换行：源码按文本处理（仓库内 LF），二进制原样
+* text=auto
+
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.ttf   binary
+*.otf   binary
+*.dll   binary
+*.exe   binary
+*.lib   binary
+*.cer   binary
+*.sln   text eol=crlf
+*.vcxproj text eol=crlf

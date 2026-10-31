@@ -1,0 +1,401 @@
+#!/usr/bin/env python3
+"""Regressions for omissions that otherwise reach the remote build matrix."""
+
+from __future__ import annotations
+
+from contextlib import redirect_stderr, redirect_stdout
+import importlib.util
+import io
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+
+SPEC = importlib.util.spec_from_file_location(
+    "fluent_qt_preflight", Path(__file__).with_name("fluent_qt_preflight.py")
+)
+MODULE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = MODULE
+SPEC.loader.exec_module(MODULE)
+
+
+class LocalPreflightTest(unittest.TestCase):
+    def test_quick_test_edits_select_the_registered_owner_not_the_category(self):
+        for path, target in (
+            ("tests/components/basicinput/TestButton.cpp", "test_button"),
+            ("tests/components/status_info/TestToast.cpp", "test_toast"),
+            ("tests/components/collections/FluentListItemDelegate.cpp", "test_list_view"),
+            ("src/components/status_info/Toast.cpp", "test_toast"),
+        ):
+            with self.subTest(path=path):
+                cpp, _, pyside = MODULE.quick_selection([path])
+                self.assertEqual(cpp.targets, (target,))
+                self.assertEqual(cpp.label_regex, f"^({target})$")
+                self.assertFalse(pyside)
+
+    def test_quick_shared_headers_and_unknown_components_keep_broad_coverage(self):
+        for path in ("src/compatibility/QtCompat.h", "src/components/foundation/NewBase.h"):
+            with self.subTest(path=path):
+                cpp, _, pyside = MODULE.quick_selection([path])
+                self.assertEqual(cpp.scope, "all")
+                self.assertTrue(pyside)
+        cpp, _, pyside = MODULE.quick_selection(["src/components/basicinput/Button.h"])
+        self.assertEqual(cpp.targets, ("fluent_qt_basicinput_tests",))
+        self.assertTrue(pyside)
+
+    def test_quick_python_test_file_and_private_module_have_focused_suites(self):
+        cpp, regex, needed = MODULE.quick_selection([
+            "bindings/pyside6/gallery/tests/test_gallery_particle_compositor.py"])
+        self.assertEqual(cpp.scope, "none")
+        self.assertTrue(needed)
+        self.assertEqual(regex, "^(test_pyside6_gallery_particle_compositor)$")
+        _, regex, needed = MODULE.quick_selection([
+            "bindings/pyside6/gallery/src/fluentqt_gallery/particle_compositor.py"])
+        self.assertTrue(needed)
+        self.assertIn("test_pyside6_gallery_spatial", regex)
+        self.assertIn("test_pyside6_gallery_particle_compositor", regex)
+        self.assertIn("test_pyside6_gallery_python_snippet_catalog", regex)
+        command = MODULE.lane_commands({"kind": "pyside", "build_dir": "build/py"}, cpp, "Release", regex)[-1]
+        self.assertIn("^pyside$", command)
+        self.assertEqual(command[-2:], ["-R", regex])
+
+    def test_quick_mixed_paths_union_owners_and_unknown_inputs_are_not_dropped(self):
+        cpp, _, _ = MODULE.quick_selection([
+            "tests/components/basicinput/TestButton.cpp", "tests/components/status_info/TestToast.cpp"])
+        self.assertEqual(cpp.targets, ("test_button", "test_toast"))
+        cpp, _, _ = MODULE.quick_selection([
+            "tests/components/basicinput/TestButton.cpp", "tests/UnknownInfrastructure.cpp"])
+        self.assertEqual(cpp.scope, "all")
+
+    def test_quick_tooling_runs_its_owner_without_the_packaging_matrix(self):
+        checks = MODULE.quick_checks(["tools/dev/fluent_qt_preflight.py"])
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(Path(checks[0][1][-1]).name, "test_fluent_qt_preflight.py")
+        with mock.patch.object(MODULE.RELEASE, "integration_checks", return_value=[("fallback", ["check"])]):
+            checks = dict(MODULE.quick_checks(["tools/dev/unknown_tool.py"]))
+            self.assertEqual(checks["fallback"], ["check"])
+
+    def test_quick_source_paths_always_check_compatibility_boundaries_first(self):
+        paths = (
+            "app/view/ContentPresenter.cpp",
+            "src/components/status_info/Toast.cpp",
+            "src/compatibility/private/PopupWindowCompat_p.h",
+            "include/FluentQt/Public.hpp",
+            "examples/window/Native.mm",
+            "tests/components/basicinput/TestButton.cpp",
+            "support/Window.h",
+            "bindings/pyside6/native/wrappers.h",
+            "bindings/pyside6/native/wrappers.cpp",
+            "bindings/pyside6/src/fluentqt/foundation.py",
+            "bindings/pyside6/gallery/src/fluentqt_gallery/window.py",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                checks = MODULE.quick_checks([path])
+                self.assertEqual(checks[0], (
+                    "compatibility boundaries",
+                    [sys.executable, "tools/quality/check_compatibility_boundaries.py",
+                     "--project-root", ".", "--self-test"],
+                ))
+                self.assertEqual(sum(label == "compatibility boundaries" for label, _ in checks), 1)
+
+    def test_quick_boundary_checker_runs_self_tests_without_packaging_or_qt(self):
+        path = "tools/quality/check_compatibility_boundaries.py"
+        self.assertEqual(MODULE.quick_checks([path]), [
+            ("compatibility boundaries",
+             [sys.executable, path, "--project-root", ".", "--self-test"]),
+        ])
+        cpp, _, pyside = MODULE.quick_selection([path])
+        self.assertEqual(cpp.scope, "none")
+        self.assertFalse(pyside)
+
+    def test_quick_mixed_paths_keep_other_gates_without_duplicate_boundary_checks(self):
+        checks = MODULE.quick_checks([
+            "tools/dev/fluent_qt_preflight.py",
+            "README.md",
+            "src/components/status_info/Toast.cpp",
+            "bindings/pyside6/gallery/src/fluentqt_gallery/window.py",
+            "tools/quality/check_compatibility_boundaries.py",
+            "src/components/status_info/Toast.h",
+        ])
+        self.assertEqual(checks[0][0], "compatibility boundaries")
+        self.assertEqual(sum(label == "compatibility boundaries" for label, _ in checks), 1)
+        self.assertTrue({"C++ format", "documentation"}.issubset(dict(checks)))
+        self.assertTrue(any(Path(command[-1]).name == "test_fluent_qt_preflight.py"
+                            for _, command in checks))
+
+    def test_quick_non_sources_and_similar_prefixes_do_not_trigger_boundary_checks(self):
+        for path in (
+            "app/README.md", "app/resources/catalog.json", "docs/sample.cpp",
+            "application/main.cpp", "src_backup/Widget.hpp", "supporting/Native.mm",
+            "bindings/pyside6/src/fluentqt/README.md",
+            "bindings/pyside6/src_backup/fluentqt/widget.py",
+            "bindings/pyside6/gallery/src_backup/fluentqt_gallery/window.py",
+        ):
+            with self.subTest(path=path):
+                self.assertNotIn("compatibility boundaries", dict(MODULE.quick_checks([path])))
+
+    def test_quick_boundary_failure_stops_before_the_selected_owner_build(self):
+        lane = {"kind": "cpp", "build_dir": "build/qt", "qt": "6.2.4", "status": "not_run"}
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(MODULE, "read_build", return_value=lane), \
+                mock.patch.object(MODULE, "run_logged", return_value={
+                    "returncode": 17, "log": "boundary-failure.log",
+                }) as runner, redirect_stdout(io.StringIO()):
+            report = Path(temporary) / "report.json"
+            self.assertEqual(MODULE.main([
+                "--quick", "--paths", "tests/components/basicinput/TestButton.cpp",
+                "--build-dir", "build/qt", "--report", str(report),
+            ]), 1)
+            runner.assert_called_once()
+            self.assertEqual(runner.call_args.args[:2], (
+                "compatibility boundaries",
+                [sys.executable, "tools/quality/check_compatibility_boundaries.py",
+                 "--project-root", ".", "--self-test"],
+            ))
+            result = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["cpp_targets"], ["test_button"])
+            self.assertEqual(result["lanes"][0]["status"], "not_run")
+            self.assertEqual(result["checks"], [
+                {"returncode": 17, "log": "boundary-failure.log"},
+            ])
+
+    def test_checks_only_records_boundary_failure_without_a_qt_environment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "tools/quality/check_compatibility_boundaries.py"
+            checker.parent.mkdir(parents=True)
+            checker.write_text(
+                "print('synthetic compatibility boundary violation')\nraise SystemExit(17)\n",
+                encoding="utf-8",
+            )
+            report = root / "report.json"
+            with mock.patch.object(MODULE, "ROOT", root), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(MODULE.main(["--checks-only", "--report", str(report)]), 1)
+            result = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["lanes"], [])
+            self.assertEqual(len(result["checks"]), 1)
+            self.assertEqual(result["checks"][0]["label"], "compatibility boundaries")
+            self.assertEqual(result["checks"][0]["returncode"], 17)
+            self.assertIn("synthetic compatibility boundary violation",
+                          Path(result["checks"][0]["log"]).read_text(encoding="utf-8"))
+
+    def test_quick_plan_uses_head_and_does_not_execute_checks(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(MODULE, "changed_paths", return_value=["tests/components/basicinput/TestButton.cpp"]) as changed, \
+                mock.patch.object(MODULE, "run_logged") as runner, redirect_stdout(io.StringIO()):
+            report = Path(temporary) / "plan.json"
+            self.assertEqual(MODULE.main(["--quick", "--plan", "--report", str(report)]), 0)
+            changed.assert_called_once_with(MODULE.ROOT, "HEAD")
+            runner.assert_not_called()
+            result = json.loads(report.read_text())
+            self.assertEqual(result["status"], "planned")
+            self.assertEqual(result["required_versions"], {})
+            self.assertEqual(result["cpp_targets"], ["test_button"])
+
+    def test_quick_explicit_paths_do_not_silently_claim_unchecked_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(MODULE, "changed_paths") as changed, \
+                mock.patch.object(MODULE, "run_logged") as runner, \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            report = Path(temporary) / "run.json"
+            self.assertEqual(MODULE.main(["--quick", "--paths", "tests/components/basicinput/TestButton.cpp",
+                                          "--report", str(report)]), 1)
+            changed.assert_not_called()
+            runner.assert_not_called()
+            self.assertEqual(json.loads(report.read_text())["status"], "failed")
+
+    def test_diff_includes_rename_sources_staged_unstaged_and_untracked_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def git(*args):
+                subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+            git("init", "-b", "main")
+            git("config", "user.name", "Preflight Test")
+            git("config", "user.email", "test@example.invalid")
+            for name in ("old.cpp", "edit.cpp", "staged.cpp"):
+                (root / name).write_text("before\n")
+            git("add", ".")
+            git("commit", "-m", "seed")
+            git("tag", "base")
+            git("mv", "old.cpp", "renamed.cpp")
+            git("commit", "-m", "rename")
+            (root / "edit.cpp").write_text("unstaged\n")
+            (root / "staged.cpp").write_text("staged\n")
+            git("add", "staged.cpp")
+            (root / "new file.cpp").write_text("untracked\n")
+            self.assertEqual(MODULE.changed_paths(root, "base"), [
+                "edit.cpp", "new file.cpp", "old.cpp", "renamed.cpp", "staged.cpp",
+            ])
+
+    def test_component_changes_use_ci_selection_and_include_bindings(self):
+        cpp, pyside = MODULE.selection_for(["src/components/charts/ChartView.cpp"])
+        self.assertEqual(cpp.targets, ("fluent_qt_charts_tests",))
+        self.assertEqual(cpp.label_regex, "^(charts)$")
+        self.assertTrue(pyside)
+
+    def test_gallery_changes_include_native_shell_and_python_gallery(self):
+        cpp, pyside = MODULE.selection_for(["app/view/ContentPresenter.cpp"])
+        self.assertEqual(cpp.targets, ("fluent_qt_gallery_tests",))
+        self.assertEqual(cpp.label_regex, "^(gallery)$")
+        self.assertEqual(cpp, MODULE.CLASSIFIER.select_cpp_tests(["app/view/ContentPresenter.cpp"]))
+        self.assertTrue(pyside)
+
+    def test_docs_and_tooling_do_not_force_a_native_rebuild(self):
+        cpp, pyside = MODULE.selection_for([
+            "docs/development/ci-workflow.md", "tools/dev/fluent_qt_preflight.py",
+            ".github/workflows/ci.yml",
+        ])
+        self.assertEqual(cpp.scope, "none")
+        self.assertFalse(pyside)
+
+    def test_shared_native_code_falls_back_to_full_host_tests(self):
+        cpp, _ = MODULE.selection_for(["src/compatibility/QtCompat.h"])
+        self.assertEqual(cpp.targets, ("fluent_qt_all_tests",))
+
+    def test_runtime_commands_error_on_zero_tests_and_preserve_headless_exclusions(self):
+        cpp, _ = MODULE.selection_for(["src/components/status_info/Toast.cpp"])
+        commands = MODULE.lane_commands({"kind": "cpp", "build_dir": "build/qt"}, cpp, "Debug")
+        self.assertEqual(commands[0], ["cmake", "-S", str(MODULE.ROOT), "-B", "build/qt"])
+        self.assertIn("fluent_qt_status_info_tests", commands[1])
+        self.assertIn("--no-tests=error", commands[2])
+        self.assertIn("^(status_info)$", commands[2])
+        self.assertIn("manual_visual", " ".join(commands[2]))
+
+    def test_newer_sdk_success_does_not_claim_minimum_version_coverage(self):
+        required = MODULE.required_versions(MODULE.ROOT, True, True)
+        self.assertEqual(required["cpp"], ["5.15", "6.2"])
+        lanes = [{"kind": kind, "qt": "6.9.3", "status": "passed"} for kind in ("cpp", "pyside")]
+        missing = MODULE.missing_coverage(required, lanes)
+        self.assertIn("cpp/Qt 5.15", missing)
+        self.assertIn("cpp/Qt 6.2", missing)
+        self.assertIn("pyside/Qt 6.2", missing)
+        self.assertNotIn("pyside/Qt 6.9", missing)
+
+    def test_failed_and_merely_configured_builds_do_not_count_as_validated(self):
+        for status in ("not_run", "failed"):
+            self.assertEqual(MODULE.missing_coverage(
+                {"cpp": ["5.15"]}, [{"kind": "cpp", "qt": "5.15.2", "status": status}]
+            ), ["cpp/Qt 5.15"])
+
+    def make_build(self, root, kind="cpp"):
+        build = root / "build"
+        sdk = root / "qt"
+        build.mkdir()
+        sdk.mkdir()
+        (sdk / "Qt6CoreConfigVersionImpl.cmake").write_text('set(PACKAGE_VERSION "6.9.3")\n')
+        (build / "CMakeCache.txt").write_text(
+            f"CMAKE_HOME_DIRECTORY:INTERNAL={root}\nQt6Core_DIR:PATH={sdk}\n"
+            "BUILD_TESTING:BOOL=ON\nFLUENT_QT_BUILD_TESTS:BOOL=ON\n"
+            "FLUENT_QT_BUILD_PYSIDE6_BINDINGS:BOOL=ON\n"
+            "FLUENT_QT_BUILD_PYSIDE6_GALLERY:BOOL=ON\nPython_EXECUTABLE:FILEPATH=python\n"
+        )
+        return build
+
+    def test_build_metadata_comes_from_the_configured_sdk(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            build = self.make_build(root)
+            self.assertEqual(MODULE.read_build(build, "cpp", root)["qt"], "6.9.3")
+            self.assertEqual(MODULE.read_build(build, "pyside", root)["python"], "python")
+            with self.assertRaisesRegex(ValueError, "different checkout"):
+                MODULE.read_build(build, "cpp", root / "other")
+            cache = build / "CMakeCache.txt"
+            cache.write_text(cache.read_text().replace("FLUENT_QT_BUILD_TESTS:BOOL=ON", "FLUENT_QT_BUILD_TESTS:BOOL=OFF"))
+            with self.assertRaisesRegex(ValueError, "FLUENT_QT_BUILD_TESTS=ON"):
+                MODULE.read_build(build, "cpp", root)
+
+    def test_mixed_binding_runtime_and_sdk_are_rejected(self):
+        output = json.dumps({"pyside": "6.2.4", "shiboken": "6.2.4", "qt_runtime": "6.2.4"})
+        with mock.patch.object(MODULE.subprocess, "run", return_value=mock.Mock(stdout=output)):
+            with self.assertRaisesRegex(ValueError, "versions differ"):
+                MODULE.check_python_runtime({"python": "python", "qt": "6.9.3", "build_dir": "build/qt"})
+
+    def test_gallery_cannot_be_omitted_when_shared_changes_expand_the_selection(self):
+        lane = {"kind": "cpp", "build_dir": "build/qt", "qt": "6.9.3",
+                "gallery_enabled": False, "status": "not_run"}
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(MODULE, "changed_paths", return_value=["app/main.cpp", "src/design/FluentTheme.cpp"]), \
+                mock.patch.object(MODULE, "read_build", return_value=lane), \
+                mock.patch.object(MODULE, "run_logged") as runner, \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            report = Path(temporary) / "report.json"
+            self.assertEqual(MODULE.main(["--build-dir", "build/qt", "--report", str(report)]), 1)
+            runner.assert_not_called()
+            result = json.loads(report.read_text())
+            self.assertEqual(result["cpp_scope"], "all")
+            self.assertIn("FLUENT_QT_BUILD_GALLERY=ON", result["error"])
+
+    def test_runtime_failure_does_not_mark_the_sdk_as_validated(self):
+        lane = {"kind": "cpp", "build_dir": "build/qt515", "qt": "5.15.2", "status": "not_run"}
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(MODULE, "changed_paths", return_value=["tests/components/status_info/TestToast.cpp"]), \
+                mock.patch.object(MODULE.RELEASE, "integration_checks", return_value=[]), \
+                mock.patch.object(MODULE, "read_build", return_value=lane), \
+                mock.patch.object(MODULE, "run_logged", side_effect=[{"returncode": 0}, {"returncode": 0}, {"returncode": 1}]), \
+                redirect_stdout(io.StringIO()):
+            report = Path(temporary) / "report.json"
+            self.assertEqual(MODULE.main(["--build-dir", "build/qt515", "--report", str(report)]), 1)
+            result = json.loads(report.read_text())
+            self.assertEqual(result["lanes"][0]["status"], "failed")
+            self.assertEqual(result["status"], "failed")
+
+    def test_missing_runtime_environment_returns_incomplete_after_cheap_checks(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(MODULE, "changed_paths", return_value=["src/components/charts/ChartView.cpp"]), \
+                mock.patch.object(MODULE.RELEASE, "integration_checks", return_value=[]), \
+                redirect_stdout(io.StringIO()):
+            report = Path(temporary) / "report.json"
+            self.assertEqual(MODULE.main(["--report", str(report)]), 2)
+            result = json.loads(report.read_text())
+            self.assertEqual(result["status"], "incomplete")
+            self.assertIn("pyside/Qt 6.2", result["missing_coverage"])
+
+    def test_reconfigure_cannot_silently_change_the_reported_qt_version(self):
+        before = {"kind": "cpp", "build_dir": "build/qt", "qt": "5.15.2", "status": "not_run"}
+        after = dict(before, qt="6.9.3")
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(MODULE, "changed_paths", return_value=["tests/components/status_info/TestToast.cpp"]), \
+                mock.patch.object(MODULE.RELEASE, "integration_checks", return_value=[]), \
+                mock.patch.object(MODULE, "read_build", side_effect=[before, after]), \
+                mock.patch.object(MODULE, "run_logged", return_value={"returncode": 0}) as runner, \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            report = Path(temporary) / "report.json"
+            self.assertEqual(MODULE.main(["--build-dir", "build/qt", "--report", str(report)]), 1)
+            runner.assert_called_once()
+            result = json.loads(report.read_text())
+            self.assertIn("toolchain changed", result["error"])
+            self.assertNotEqual(result["lanes"][0]["status"], "passed")
+
+    def test_plan_does_not_execute_checks_or_claim_a_pass(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(MODULE, "changed_paths", return_value=[]), \
+                mock.patch.object(MODULE, "run_logged") as runner, \
+                redirect_stdout(io.StringIO()):
+            report = Path(temporary) / "plan.json"
+            self.assertEqual(MODULE.main(["--plan", "--report", str(report)]), 0)
+            runner.assert_not_called()
+            self.assertEqual(json.loads(report.read_text())["status"], "planned")
+
+    def test_first_failure_stops_and_preserves_its_log(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(MODULE.RELEASE, "integration_checks", return_value=[("first", ["one"]), ("second", ["two"])]), \
+                mock.patch.object(MODULE, "run_logged", return_value={"returncode": 1, "log": "failure.log"}) as runner, \
+                redirect_stdout(io.StringIO()):
+            report = Path(temporary) / "report.json"
+            self.assertEqual(MODULE.main(["--checks-only", "--report", str(report)]), 1)
+            runner.assert_called_once()
+            result = json.loads(report.read_text())
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["checks"][0]["log"], "failure.log")
+
+
+if __name__ == "__main__":
+    unittest.main()

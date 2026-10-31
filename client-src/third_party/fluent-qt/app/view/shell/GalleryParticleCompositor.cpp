@@ -1,0 +1,687 @@
+#include "GalleryParticleCompositor.h"
+
+#ifdef FLUENT_QT_HAS_SPATIAL
+#include "GalleryGlyphPaintDevice.h"
+#include "components/layout/ParticleBackdrop.h"
+#include "components/spatial/ParticleLayer.h"
+#include "components/spatial/SpatialSession.h"
+
+#include <QApplication>
+#include <QEvent>
+#include <QOpenGLBuffer>
+#include <QOpenGLContext>
+#include <QOpenGLFramebufferObject>
+#include <QOpenGLFunctions>
+#include <QOpenGLPaintDevice>
+#include <QOpenGLShaderProgram>
+#include <QOpenGLVertexArrayObject>
+#include <QPainter>
+#include <QPointer>
+#include <QVector4D>
+#include <QVector2D>
+#include <QWidget>
+#include <QtMath>
+#include <array>
+#include <limits>
+#include <vector>
+
+namespace fluent::gallery::spatial_render {
+namespace {
+using layout::ParticleBackdrop;
+using spatial::ParticleLayer;
+
+bool unsupportedAncestors(QWidget* widget, QWidget* root)
+{
+    for (QWidget* parent = widget->parentWidget(); parent && parent != root; parent = parent->parentWidget())
+        if (!parent->mask().isEmpty() || parent->graphicsEffect())
+            return true;
+    return false;
+}
+
+QRect clippedRect(QWidget* widget, QWidget* root)
+{
+    if (!widget || !root || widget->isWindow() || !widget->isVisibleTo(root) || !root->isVisible())
+        return {};
+    QRect clip(widget->mapTo(root, QPoint()), widget->size());
+    for (QWidget* parent = widget->parentWidget(); parent; parent = parent->parentWidget()) {
+        if (parent != root && (!parent->mask().isEmpty() || parent->graphicsEffect()))
+            return {}; // Preserve unrelated nonrectangular/effect composition on CPU.
+        clip &= QRect(parent->mapTo(root, QPoint()), parent->size());
+        if (parent == root)
+            return clip;
+    }
+    return {};
+}
+
+QList<QWidget*> foregroundWidgets(ParticleBackdrop* backdrop, QWidget* root)
+{
+    QList<QWidget*> result;
+    for (auto* child : backdrop->children())
+        if (auto* widget = qobject_cast<QWidget*>(child); widget && !widget->isWindow() && !widget->isHidden())
+            result.append(widget);
+    QWidget* previous = backdrop;
+    for (QWidget* parent = previous->parentWidget(); parent; parent = parent->parentWidget()) {
+        bool after = false;
+        for (auto* child : parent->children()) {
+            if (child == previous) {
+                after = true;
+                continue;
+            }
+            if (auto* widget = qobject_cast<QWidget*>(child);
+                after && widget && !widget->isWindow() && !widget->isHidden())
+                result.append(widget);
+        }
+        if (parent == root)
+            break;
+        previous = parent;
+    }
+    return result;
+}
+
+QSize physicalSize(const QSize& logical, qreal dpr)
+{
+    return QSize(qCeil(logical.width() * dpr), qCeil(logical.height() * dpr));
+}
+
+void prepareSampling(QOpenGLFramebufferObject* target)
+{
+    if (!target || !target->isValid())
+        return;
+    auto* gl = QOpenGLContext::currentContext()->functions();
+    gl->glBindTexture(GL_TEXTURE_2D, target->texture());
+    gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    gl->glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+class InsertionSampler {
+public:
+    bool create()
+    {
+        auto* context = QOpenGLContext::currentContext();
+        const bool es = context->isOpenGLES();
+        const QByteArray glVersion(reinterpret_cast<const char*>(context->functions()->glGetString(GL_VERSION)));
+        const bool es3 = context->format().majorVersion() >= 3 || glVersion.contains("OpenGL ES 3.")
+            || glVersion.contains("WebGL 2.");
+        const bool modern = es ? es3 : context->format().profile() == QSurfaceFormat::CoreProfile;
+        const QByteArray version = modern ? (es ? "#version 300 es\n" : "#version 150\n") : "";
+        const QByteArray precision = es ? "precision highp float;\n" : "";
+        const QByteArray vertex =
+            QByteArray(modern ? "in vec2 position; out vec2 uv;\n" : "attribute vec2 position; varying vec2 uv;\n")
+            + "void main(){ uv=(position+1.0)*0.5; gl_Position=vec4(position,0.0,1.0); }\n";
+        const QByteArray fragment =
+            QByteArray(modern
+                    ? "in vec2 uv; out vec4 result;\n#define SAMPLE texture\n"
+                      "#define OUTPUT result\n"
+                    : "varying vec2 uv;\n#define SAMPLE texture2D\n"
+                      "#define OUTPUT gl_FragColor\n")
+            + "uniform sampler2D baseImage, particleImage, foregroundImage;\n"
+              "uniform vec2 panelSize; uniform vec4 particleRect, clipRect;\n"
+              "void main(){\n"
+              "vec4 b=SAMPLE(baseImage,uv); vec2 at=vec2(uv.x,1.0-uv.y)*panelSize;\n"
+              "vec2 fp=(at-clipRect.xy)/clipRect.zw;\n"
+              "if(all(greaterThanEqual(fp,vec2(0.0)))&&all(lessThanEqual(fp,vec2(1.0)))){\n"
+              "vec2 pp=(at-particleRect.xy)/particleRect.zw;\n"
+              "vec4 p=SAMPLE(particleImage,vec2(pp.x,1.0-pp.y));\n"
+              "vec4 f=SAMPLE(foregroundImage,vec2(fp.x,1.0-fp.y));\n"
+              // b = f + background*(1-f.a). Insert p without redrawing/blending f twice.
+              "b=b+p*(1.0-f.a)-(b-f)*p.a;\n"
+              "}\nOUTPUT=clamp(b,0.0,1.0); }\n";
+        if (!program.addShaderFromSourceCode(QOpenGLShader::Vertex, version + precision + vertex)
+            || !program.addShaderFromSourceCode(QOpenGLShader::Fragment, version + precision + fragment))
+            return false;
+        program.bindAttributeLocation("position", 0);
+        if (!program.link() || !vertices.create())
+            return false;
+        vao.create();
+        QOpenGLVertexArrayObject::Binder binding(&vao);
+        vertices.bind();
+        const GLfloat quad[] = {-1, -1, 1, -1, -1, 1, 1, 1};
+        vertices.allocate(quad, sizeof(quad));
+        vertices.release();
+        return true;
+    }
+
+    bool
+    draw(GLuint base, GLuint particle, GLuint foreground, const QSizeF& panel, const QRect& rect, const QRect& clip)
+    {
+        auto* gl = QOpenGLContext::currentContext()->functions();
+        QOpenGLVertexArrayObject::Binder binding(&vao);
+        if (!program.bind())
+            return false;
+        vertices.bind();
+        program.enableAttributeArray(0);
+        program.setAttributeBuffer(0, GL_FLOAT, 0, 2);
+        program.setUniformValue("baseImage", 0);
+        program.setUniformValue("particleImage", 1);
+        program.setUniformValue("foregroundImage", 2);
+        program.setUniformValue("panelSize", QVector2D(panel.width(), panel.height()));
+        program.setUniformValue("particleRect", QVector4D(rect.x(), rect.y(), rect.width(), rect.height()));
+        program.setUniformValue("clipRect", QVector4D(clip.x(), clip.y(), clip.width(), clip.height()));
+        const GLuint textures[] = {base, particle, foreground};
+        for (int i = 0; i < 3; ++i) {
+            gl->glActiveTexture(GL_TEXTURE0 + i);
+            gl->glBindTexture(GL_TEXTURE_2D, textures[i]);
+        }
+        gl->glDisable(GL_BLEND);
+        gl->glDisable(GL_DEPTH_TEST);
+        gl->glDisable(GL_STENCIL_TEST);
+        gl->glDisable(GL_SCISSOR_TEST);
+        gl->glColorMask(true, true, true, true);
+        gl->glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        for (int i = 2; i >= 0; --i) {
+            gl->glActiveTexture(GL_TEXTURE0 + i);
+            gl->glBindTexture(GL_TEXTURE_2D, 0);
+        }
+        program.disableAttributeArray(0);
+        vertices.release();
+        program.release();
+        return gl->glGetError() == GL_NO_ERROR;
+    }
+
+private:
+    QOpenGLShaderProgram program;
+    QOpenGLBuffer vertices;
+    QOpenGLVertexArrayObject vao;
+};
+} // namespace
+
+struct GalleryParticleCompositor::Private {
+    struct Layer {
+        std::unique_ptr<ParticleLayer> renderer;
+        bool previousAcceleration = false;
+        QRect rect, clip;
+        std::unique_ptr<QOpenGLFramebufferObject> foreground;
+        quint64 foregroundRevision = 0;
+    };
+    QPointer<QWidget> root;
+    QPointer<spatial::SpatialSession> session;
+    QPointer<QOpenGLContext> context;
+    QList<QPointer<ParticleBackdrop>> candidates, sources;
+    QList<QRect> sourceRects, sourceClips;
+    std::vector<Layer> layers;
+    std::unique_ptr<InsertionSampler> sampler;
+    std::array<std::unique_ptr<QOpenGLFramebufferObject>, 2> composed;
+    QSize panelPixels;
+    qreal nativeDpr = 0, cacheDpr = 0;
+    quint64 scanRevision = 0, staticRevision = 0, lastFrames = 0;
+    quint64 captures = 0, compositions = 0, scans = 0, bytes = 0, maximumBytes = 0;
+    quint64 nativeRequired = 0;
+    GLuint result = 0;
+    bool releasing = false;
+    bool scanned = false, validated = false, failed = false;
+};
+
+GalleryParticleCompositor::GalleryParticleCompositor(QObject* parent, spatial::SpatialSession* session)
+    : QObject(parent), d(std::make_unique<Private>())
+{
+    d->session = session ? session : new spatial::SpatialSession(this, this);
+    if (!session)
+        d->session->activate();
+    connect(d->session, &spatial::SpatialSession::activeChanged, this, [this](bool active) {
+        if (!active)
+            release();
+    });
+    connect(d->session, &QObject::destroyed, this, [this] { release(); });
+}
+
+GalleryParticleCompositor::~GalleryParticleCompositor()
+{
+    if (qApp)
+        qApp->removeEventFilter(this);
+    releaseGpu(false);
+    if (d->session) {
+        disconnect(d->session, nullptr, this, nullptr);
+        if (d->session->parent() == this)
+            d->session->deactivate();
+    }
+}
+
+bool GalleryParticleCompositor::eventFilter(QObject* watched, QEvent* event)
+{
+    if (!d->root)
+        return false;
+    switch (event->type()) {
+    case QEvent::ChildAdded:
+    case QEvent::ChildRemoved:
+    case QEvent::Show:
+    case QEvent::Hide:
+    case QEvent::ParentChange:
+    case QEvent::Move:
+    case QEvent::Resize:
+    case QEvent::ZOrderChange:
+    case QEvent::LayoutRequest:
+        if (auto* widget = qobject_cast<QWidget*>(watched);
+            widget && (widget == d->root || d->root->isAncestorOf(widget)))
+            d->scanned = d->validated = false;
+        break;
+    default:
+        break;
+    }
+    return false;
+}
+
+quint64 GalleryParticleCompositor::requiredBytes(QWidget* content,
+    quint64 revision,
+    const QSize& panelPixels,
+    qreal nativeDpr,
+    qreal cacheDpr,
+    bool enabled)
+{
+    if (d->releasing)
+        return 0;
+    auto* context = QOpenGLContext::currentContext();
+    if (!d->session || !d->session->isActive() || !enabled || !content || !context || panelPixels.isEmpty()
+        || !qIsFinite(nativeDpr) || nativeDpr <= 0 || !qIsFinite(cacheDpr) || cacheDpr <= 0) {
+        release();
+        return 0;
+    }
+    const QPointer<GalleryParticleCompositor> lifetime(this);
+    const auto session = d->session;
+    const QPointer<QWidget> root(content);
+    const auto available = [&] { return lifetime && session && session == d->session && session->isActive() && root; };
+    if (d->root != content || d->context != context || d->nativeDpr != nativeDpr) {
+        release();
+        if (!available())
+            return 0;
+        d->root = content;
+        d->context = context;
+        d->nativeDpr = nativeDpr;
+        qApp->installEventFilter(this);
+    }
+    if (!d->scanned) {
+        ++d->scans;
+        // Pixel-only invalidation (including CPU particle ticks) does not change
+        // membership. Geometry/tree events invalidate this visible-source cache.
+        d->candidates.clear();
+        std::function<void(QWidget*)> visit = [&](QWidget* parent) {
+            for (auto* child : parent->children()) {
+                auto* widget = qobject_cast<QWidget*>(child);
+                if (!widget || widget->isWindow() || widget->isHidden())
+                    continue;
+                if (auto* backdrop = qobject_cast<ParticleBackdrop*>(widget))
+                    d->candidates.append(backdrop);
+                visit(widget);
+            }
+        };
+        visit(content);
+        d->scanned = true;
+        d->validated = false;
+    }
+    if (!d->validated || d->scanRevision != revision) {
+        QList<QPointer<ParticleBackdrop>> visible;
+        QList<QRect> rects, clips;
+        for (const auto& candidate : d->candidates) {
+            auto* backdrop = candidate.data();
+            if (!backdrop)
+                continue;
+            bool supported = backdrop->mask().isEmpty() && !backdrop->graphicsEffect()
+                && !clippedRect(backdrop, content).isEmpty();
+            for (auto* foreground : foregroundWidgets(backdrop, content)) {
+                if (foreground->graphicsEffect() || !foreground->mask().isEmpty()
+                    || unsupportedAncestors(foreground, content)) {
+                    supported = false;
+                    break;
+                }
+            }
+            if (supported) {
+                visible.append(backdrop);
+                rects.append(QRect(backdrop->mapTo(content, QPoint()), backdrop->size()));
+                clips.append(clippedRect(backdrop, content));
+            }
+        }
+        if (visible != d->sources || rects != d->sourceRects || clips != d->sourceClips) {
+            releaseGpu();
+            if (!available() || d->root != root)
+                return 0;
+            d->sources = visible;
+            d->sourceRects = rects;
+            d->sourceClips = clips;
+            d->nativeRequired = 0;
+            d->failed = false;
+        }
+        d->scanRevision = revision;
+        d->validated = true;
+    }
+    if (d->sources.empty())
+        return 0;
+    const auto limit = std::numeric_limits<quint64>::max();
+    if (!d->nativeRequired) {
+        for (const auto& rect : d->sourceRects) {
+            const auto estimated = ParticleLayer::estimatedBytes(rect.size(), nativeDpr);
+            if (!estimated || estimated > limit - d->nativeRequired) {
+                d->nativeRequired = limit;
+                break;
+            }
+            d->nativeRequired += estimated;
+        }
+    }
+    quint64 required = quint64(panelPixels.width()) * quint64(panelPixels.height()) * 4
+        * (d->sources.size() > 1 ? 2 : 1);
+    for (int i = 0; i < d->sources.size(); ++i) {
+        const QSize foreground = physicalSize(d->sourceClips[i].size(), cacheDpr);
+        const quint64 pixels = quint64(foreground.width()) * quint64(foreground.height()) * 4;
+        if (pixels > limit - required)
+            return limit;
+        required += pixels;
+    }
+    return d->nativeRequired > limit - required ? limit : required + d->nativeRequired;
+}
+
+bool GalleryParticleCompositor::prepare(QWidget* content,
+    quint64 revision,
+    const QSize& panelPixels,
+    qreal nativeDpr,
+    qreal cacheDpr,
+    quint64 maximumBytes,
+    bool enabled)
+{
+    const quint64 required = requiredBytes(content, revision, panelPixels, nativeDpr, cacheDpr, enabled);
+    if (!required)
+        return false;
+    const QPointer<GalleryParticleCompositor> lifetime(this);
+    const auto session = d->session;
+    const auto root = d->root;
+    const auto available = [&] {
+        return lifetime && session && session == d->session && session->isActive() && root && root == d->root
+            && !d->sources.empty();
+    };
+    // Candidate estimates leave the active targets intact. Only the selected
+    // plan changes allocated geometry, avoiding per-frame sampling-level churn.
+    if (d->panelPixels != panelPixels || d->cacheDpr != cacheDpr) {
+        releaseGpu();
+        if (!available())
+            return false;
+        d->panelPixels = panelPixels;
+        d->cacheDpr = cacheDpr;
+        d->failed = false;
+    }
+    if (d->failed && d->maximumBytes == maximumBytes)
+        return false; // Retry only a geometry/source/context/preference/budget change.
+    d->maximumBytes = maximumBytes;
+    if (required > maximumBytes) {
+        releaseGpu();
+        if (lifetime)
+            d->failed = true;
+        return false;
+    }
+    if (d->layers.empty()) {
+        const auto sources = d->sources;
+        const auto rects = d->sourceRects;
+        const auto clips = d->sourceClips;
+        for (int i = 0; i < sources.size(); ++i) {
+            const QPointer<ParticleBackdrop> backdrop = sources[i];
+            if (!backdrop) {
+                releaseGpu();
+                return false;
+            }
+            Private::Layer layer;
+            layer.previousAcceleration = backdrop->isGpuAccelerationEnabled();
+            const auto failLayer = [&] {
+                if (backdrop)
+                    backdrop->setGpuAccelerationEnabled(layer.previousAcceleration);
+                if (lifetime) {
+                    releaseGpu();
+                    if (lifetime)
+                        d->failed = true;
+                }
+                return false;
+            };
+            // Acceleration notifications can stop/destroy the borrowed session and clear the plan.
+            // zh_CN: 加速状态通知可停用或销毁借用的会话，并清空当前计划。
+            backdrop->setGpuAccelerationEnabled(true);
+            if (!backdrop || !available())
+                return failLayer();
+            layer.renderer.reset(session->createParticleLayer(backdrop));
+            if (!backdrop || !available() || !layer.renderer)
+                return failLayer();
+            layer.rect = rects[i];
+            layer.clip = clips[i];
+            connect(layer.renderer.get(), &ParticleLayer::frameRequested, this,
+                &GalleryParticleCompositor::frameRequested);
+            connect(layer.renderer.get(), &ParticleLayer::activeChanged, this, [this] {
+                if (!d->releasing)
+                    emit staticContentInvalidated();
+            });
+            d->layers.push_back(std::move(layer));
+        }
+        d->result = 0;
+    }
+
+    const int outputs = d->layers.size() > 1 ? 2 : 1;
+    quint64 auxiliaryBytes = quint64(panelPixels.width()) * quint64(panelPixels.height()) * 4 * outputs;
+    for (const auto& layer : d->layers) {
+        const QSize foregroundPixels = physicalSize(layer.clip.size(), cacheDpr);
+        auxiliaryBytes += quint64(foregroundPixels.width()) * quint64(foregroundPixels.height()) * 4;
+    }
+    if (!d->sampler) {
+        auto sampler = std::make_unique<InsertionSampler>();
+        if (!sampler->create()) {
+            releaseGpu();
+            if (lifetime)
+                d->failed = true;
+            return false;
+        }
+        d->sampler = std::move(sampler);
+    }
+    QOpenGLFramebufferObjectFormat textureFormat;
+    textureFormat.setInternalTextureFormat(GL_RGBA8);
+    if (!d->composed[0]) {
+        for (int i = 0; i < outputs; ++i) {
+            d->composed[size_t(i)] = std::make_unique<QOpenGLFramebufferObject>(panelPixels, textureFormat);
+            prepareSampling(d->composed[size_t(i)].get());
+        }
+        for (auto& layer : d->layers) {
+            layer.foreground = std::make_unique<QOpenGLFramebufferObject>(physicalSize(layer.clip.size(), cacheDpr),
+                textureFormat);
+            prepareSampling(layer.foreground.get());
+        }
+    }
+    bool valid = true;
+    for (int i = 0; i < outputs; ++i)
+        valid &= d->composed[size_t(i)]->isValid();
+    quint64 allocated = auxiliaryBytes;
+    for (auto& layer : d->layers) {
+        valid &= layer.foreground->isValid();
+        if (valid) {
+            valid &= layer.renderer->render(nativeDpr, maximumBytes - allocated);
+            allocated += layer.renderer->allocatedBytes();
+        }
+    }
+    if (!valid) {
+        releaseGpu();
+        if (lifetime)
+            d->failed = true;
+        return false;
+    }
+    if (allocated > maximumBytes) {
+        releaseGpu();
+        if (lifetime)
+            d->failed = true;
+        return false;
+    }
+    d->bytes = allocated;
+    return true;
+}
+
+unsigned int GalleryParticleCompositor::compose(unsigned int base,
+    quint64 revision,
+    QOpenGLFramebufferObject* paintTarget,
+    QOpenGLFramebufferObject* resolveTarget,
+    const RenderWidget& renderWidget)
+{
+    if (!d->root || d->layers.empty() || !base)
+        return base;
+    auto* context = QOpenGLContext::currentContext();
+    if (!context || context != d->context || !paintTarget || !resolveTarget || !paintTarget->isValid()
+        || !resolveTarget->isValid() || paintTarget->size() != resolveTarget->size()) {
+        release();
+        return base;
+    }
+    const quint64 frames = particleFrameCount();
+    if (d->result && d->staticRevision == revision && d->lastFrames == frames)
+        return d->result;
+    auto* gl = context->functions();
+    for (auto& layer : d->layers) {
+        if (layer.foregroundRevision == revision)
+            continue;
+        const QSize pixels = layer.foreground->size();
+        if (pixels.width() > paintTarget->width()) {
+            releaseGpu();
+            d->failed = true;
+            return base;
+        }
+        const int guard = qMax(1, qCeil(d->cacheDpr));
+        const int stride =
+            pixels.height() <= paintTarget->height() ? pixels.height() : qMax(1, paintTarget->height() - 2 * guard);
+        const auto foreground = foregroundWidgets(layer.renderer->backdrop(), d->root);
+        for (int top = 0; top < pixels.height(); top += stride) {
+            const int height = qMin(stride, pixels.height() - top);
+            const int paintTop = qMax(0, top - guard);
+            const int paintBottom = qMin(pixels.height(), top + height + guard);
+            const int paintHeight = paintBottom - paintTop;
+            paintTarget->bind();
+            gl->glDisable(GL_SCISSOR_TEST);
+            gl->glColorMask(true, true, true, true);
+            gl->glStencilMask(0xFFFFFFFF);
+            gl->glClearColor(0, 0, 0, 0);
+            gl->glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+            QOpenGLPaintDevice device(QSize(pixels.width(), paintHeight));
+            device.setDevicePixelRatio(d->cacheDpr);
+            const QPointF origin = layer.clip.topLeft() + QPointF(0, paintTop / d->cacheDpr);
+            GalleryGlyphPaintDevice glyphDevice(device, d->nativeDpr, origin);
+            QPaintDevice* target =
+                needsNativeGlyphCoverage(d->nativeDpr) ? static_cast<QPaintDevice*>(&glyphDevice) : &device;
+            QPainter painter(target);
+            painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+            painter.translate(-origin);
+            const QRectF strip(origin, QSizeF(layer.clip.width(), paintHeight / d->cacheDpr));
+            painter.setClipRect(strip);
+            for (auto* widget : foreground) {
+                const QRect clip = clippedRect(widget, d->root) & layer.clip & strip.toAlignedRect();
+                if (clip.isEmpty())
+                    continue;
+                const QPoint widgetOrigin = widget->mapTo(d->root, QPoint());
+                painter.save();
+                painter.setClipRect(clip, Qt::IntersectClip);
+                painter.translate(widgetOrigin);
+                renderWidget(painter, widget, QRegion(clip.translated(-widgetOrigin)));
+                painter.restore();
+            }
+            painter.end();
+            gl->glDisable(GL_SCISSOR_TEST);
+            // Resolve identical MSAA rectangles first, then copy the guarded
+            // strip. These are the canvas's existing targets, not new caches.
+            const QRect painted(0, 0, pixels.width(), paintHeight);
+            QOpenGLFramebufferObject::blitFramebuffer(resolveTarget, painted, paintTarget, painted);
+            QOpenGLFramebufferObject::blitFramebuffer(layer.foreground.get(),
+                QRect(0, pixels.height() - top - height, pixels.width(), height), resolveTarget,
+                QRect(0, paintBottom - top - height, pixels.width(), height));
+        }
+        if (gl->glGetError() != GL_NO_ERROR) {
+            releaseGpu();
+            d->failed = true;
+            return base;
+        }
+        layer.foregroundRevision = revision;
+        ++d->captures;
+    }
+    unsigned int input = base;
+    for (size_t i = 0; i < d->layers.size(); ++i) {
+        auto& layer = d->layers[i];
+        auto* output = d->composed[i % 2].get();
+        output->bind();
+        gl->glViewport(0, 0, d->panelPixels.width(), d->panelPixels.height());
+        if (!d->sampler->draw(input, layer.renderer->textureId(), layer.foreground->texture(), d->root->size(),
+                layer.rect, layer.clip)) {
+            releaseGpu();
+            d->failed = true;
+            return base;
+        }
+        input = output->texture();
+    }
+    d->result = input;
+    d->staticRevision = revision;
+    d->lastFrames = frames;
+    ++d->compositions;
+    return input;
+}
+
+void GalleryParticleCompositor::releaseGpu(bool notify)
+{
+    if (d->releasing)
+        return;
+    const QPointer<GalleryParticleCompositor> lifetime(this);
+    const bool active = activeLayerCount() != 0;
+    d->releasing = true;
+    auto layers = std::move(d->layers);
+    d->composed = {};
+    d->sampler.reset();
+    d->staticRevision = d->lastFrames = d->bytes = 0;
+    d->result = 0;
+    for (auto& layer : layers) {
+        QPointer<ParticleBackdrop> source(layer.renderer->backdrop());
+        layer.renderer.reset();
+        if (source)
+            source->setGpuAccelerationEnabled(layer.previousAcceleration);
+    }
+    layers.clear();
+    if (!lifetime)
+        return;
+    d->releasing = false;
+    if (active && notify)
+        emit staticContentInvalidated();
+}
+
+void GalleryParticleCompositor::release()
+{
+    if (qApp)
+        qApp->removeEventFilter(this);
+    d->root.clear();
+    d->context.clear();
+    d->candidates.clear();
+    d->sources.clear();
+    d->sourceRects.clear();
+    d->sourceClips.clear();
+    d->scanRevision = 0;
+    d->nativeRequired = 0;
+    d->scanned = d->validated = d->failed = false;
+    releaseGpu();
+}
+
+int GalleryParticleCompositor::activeLayerCount() const
+{
+    int count = 0;
+    for (const auto& layer : d->layers)
+        count += layer.renderer && layer.renderer->isActive();
+    return count;
+}
+
+quint64 GalleryParticleCompositor::allocatedBytes() const
+{
+    return d->bytes;
+}
+quint64 GalleryParticleCompositor::particleFrameCount() const
+{
+    quint64 frames = 0;
+    for (const auto& layer : d->layers)
+        frames += layer.renderer->renderedFrameCount();
+    return frames;
+}
+quint64 GalleryParticleCompositor::foregroundCaptureCount() const
+{
+    return d->captures;
+}
+quint64 GalleryParticleCompositor::compositionCount() const
+{
+    return d->compositions;
+}
+quint64 GalleryParticleCompositor::sourceScanCount() const
+{
+    return d->scans;
+}
+
+} // namespace fluent::gallery::spatial_render
+#endif

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>投屏客户端</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%234c9aff'/><rect x='10' y='7' width='12' height='18' rx='2' fill='%230d1117'/></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <div class="brand">
+      <span class="dot" id="dot"></span>
+      <span class="name">投屏客户端</span>
+    </div>
+    <span class="pill" id="chip-ux">初始化…</span>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1 id="hero-title">正在准备…</h1>
+      <p id="hero-sub">接收端启动后会在后台待命，手机连上才弹出画面。</p>
+      <div class="hero-actions">
+        <button id="btn-start" class="primary">启动服务</button>
+        <button id="btn-stop" class="ghost">停止</button>
+      </div>
+      <div class="hint-line" id="hero-hint"></div>
+    </section>
+
+    <details class="fold">
+      <summary>高级设置</summary>
+      <div class="fold-body">
+        <label class="row"><span>接收端程序</span><input id="cfg-exe" placeholder="receiver/airplay-windows/airplay-windows.exe"></label>
+        <label class="row"><span>预设</span>
+          <select id="cfg-preset"><option value="">自定义</option></select>
+        </label>
+        <div class="grid2">
+          <label><span>设备名</span><input id="cfg-name" placeholder="WebMirror"></label>
+          <label><span>帧率</span><input id="cfg-fps" type="number" min="15" max="120" step="5"></label>
+        </div>
+        <div class="grid2">
+          <label><span>视频 sink</span><input id="cfg-sink" placeholder="可空"></label>
+          <label><span>额外参数</span><input id="cfg-extra" placeholder="可空"></label>
+        </div>
+        <div class="grid2">
+          <label class="check"><input id="cfg-fs" type="checkbox"><span>全屏</span></label>
+          <label class="check"><input id="cfg-preview" type="checkbox" checked><span>窗口预览</span></label>
+        </div>
+        <div class="grid2">
+          <label><span>预览窗口标题</span><input id="cfg-preview-title" placeholder="AirPlay"></label>
+          <label><span>HID 传输</span>
+            <select id="cfg-hid-mode">
+              <option value="mock">mock（无硬件）</option>
+              <option value="serial">serial（ESP32）</option>
+              <option value="file">file（落盘）</option>
+            </select>
+          </label>
+        </div>
+        <div class="grid2">
+          <label><span>串口</span><input id="cfg-hid-port" placeholder="COM3"></label>
+          <div class="save-wrap"><button id="btn-save" class="ghost">保存配置</button></div>
+        </div>
+        <div class="preview"><img id="preview" alt=""></div>
+      </div>
+    </details>
+
+    <details class="fold">
+      <summary>触控板 <small>虚拟指针 / 键盘</small></summary>
+      <div class="fold-body">
+        <div id="pad" tabindex="0">
+          <span class="pad-hint">移动鼠标 = 移动手机指针 · 点击 = 单击</span>
+        </div>
+        <div class="btnrow">
+          <button data-btn="left">左键</button>
+          <button data-btn="scroll-up">上滚</button>
+          <button data-btn="scroll-down">下滚</button>
+          <button id="btn-focus">聚焦</button>
+        </div>
+        <div class="btnrow">
+          <button data-combo="home">主屏</button>
+          <button data-combo="appswitcher">多任务</button>
+          <button data-combo="back">返回</button>
+        </div>
+        <div class="row-inline">
+          <input id="txt" placeholder="发送文字到手机，回车">
+          <button id="btn-text">发送</button>
+        </div>
+        <div class="grid2" style="margin-top:10px">
+          <label class="check"><input id="cfg-keyboard" type="checkbox" checked><span>键盘直通</span></label>
+          <label class="check"><input id="cfg-hover" type="checkbox" checked><span>悬停即移动</span></label>
+        </div>
+      </div>
+    </details>
+
+    <details class="fold">
+      <summary>日志</summary>
+      <div class="fold-body">
+        <pre id="log"></pre>
+        <div class="btnrow"><span class="pill small" id="chip-hid">HID —</span><span class="pill small" id="chip-in">输入 0</span></div>
+      </div>
+    </details>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

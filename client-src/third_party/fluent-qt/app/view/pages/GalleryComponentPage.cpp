@@ -1,0 +1,291 @@
+#include "GalleryComponentPage.h"
+
+#include <algorithm>
+
+#include "components/basicinput/Button.h"
+#include "components/layout/Expander.h"
+#include "components/textfields/Label.h"
+#include <QVBoxLayout>
+#include "components/status_info/ToolTip.h"
+#include "design/Typography.h"
+#include "model/GalleryComponentCatalog.h"
+#include "model/GalleryNavigationItem.h"
+#include "model/GalleryPythonSnippetCatalog.h"
+#include "platform/GalleryPlatform.h"
+#include "viewmodel/GalleryNavigationViewModel.h"
+#include "viewmodel/GallerySettings.h"
+#include "view/widgets/GalleryComponentReferenceCard.h"
+#include "view/widgets/GalleryCodeBlock.h"
+#include "view/widgets/GalleryEntryCard.h"
+#include "view/widgets/GallerySampleCard.h"
+#include "view/widgets/GallerySampleCatalog.h"
+#include "support/logging/Log.h"
+
+namespace fluent::gallery {
+
+namespace {
+constexpr int kThemeButtonSize = 32;
+constexpr int kThemeButtonIconSize = Typography::IconSize::Standard;
+
+QString previewThemeGlyph(FluentElement::Theme theme)
+{
+    if (FluentElement::themeUsesDarkAppearance(theme)) {
+        return Typography::Icons::glyph(QStringLiteral("ic_fluent_weather_moon_16_regular"));
+    }
+    return Typography::Icons::Sunny;
+}
+
+QString previewThemeName(FluentElement::Theme theme)
+{
+    switch (theme) {
+    case FluentElement::Light:
+        return QStringLiteral("Light");
+    case FluentElement::Dark:
+        return QStringLiteral("Dark");
+    case FluentElement::HighContrast:
+        return QStringLiteral("High contrast");
+    }
+    return QStringLiteral("Light");
+}
+} // namespace
+
+GalleryComponentPage::GalleryComponentPage(const GalleryContentEntry& entry,
+                                           const GalleryNavigationViewModel& navigationViewModel,
+                                           QWidget* parent)
+    : GalleryComponentPage(
+          entry, navigationViewModel,
+          GalleryComponentPageOptions{platform::capabilities().showsBilingualDocumentation}, parent)
+{}
+
+GalleryComponentPage::GalleryComponentPage(const GalleryContentEntry& entry,
+                                           const GalleryNavigationViewModel& navigationViewModel,
+                                           const GalleryComponentPageOptions& options,
+                                           QWidget* parent)
+    : GalleryContentPage(entry.routeId, entry.title, QString(), parent),
+      m_overviewText(entry.description), m_sampleTheme(currentTheme())
+{
+    setObjectName(QStringLiteral("galleryComponentPage"));
+
+    m_themeButton = new fluent::basicinput::Button(this);
+    m_themeButton->setObjectName(QStringLiteral("galleryComponentPageThemeButton"));
+    m_themeButton->setFluentStyle(fluent::basicinput::Button::Standard);
+    m_themeButton->setFluentLayout(fluent::basicinput::Button::IconOnly);
+    m_themeButton->setFluentSize(fluent::basicinput::Button::StandardSize);
+    m_themeButton->setFixedSize(kThemeButtonSize, kThemeButtonSize);
+    connect(m_themeButton, &fluent::basicinput::Button::clicked, this,
+            &GalleryComponentPage::toggleSampleTheme);
+    addHeaderAction(m_themeButton);
+    updateThemeButton();
+
+    addSectionHeader(QStringLiteral("Overview"));
+    if (!m_overviewText.isEmpty())
+        addBodyText(m_overviewText);
+
+    m_samples = gallerySamplesForRoute(entry.routeId);
+    const auto& samples = m_samples;
+    QStringList codeSampleIds;
+    codeSampleIds.reserve(samples.size());
+    for (const GallerySample& sample : samples) {
+        if (!sample.codeSnippet.isEmpty())
+            codeSampleIds.append(sample.id);
+    }
+
+    const GalleryComponentReference reference = galleryComponentReference(entry.routeId);
+    m_bilingualDocumentationEnabled = options.requestBilingualDocumentation &&
+                                      reference.hasPythonReference() &&
+                                      galleryPythonSnippetsAvailable(entry.routeId, codeSampleIds);
+    if (options.requestBilingualDocumentation && !m_bilingualDocumentationEnabled) {
+        LOG_WARN(QStringLiteral(
+                     "GalleryComponentPage bilingual source unavailable; using C++ only routeId=%1")
+                     .arg(entry.routeId));
+    }
+    if (reference.isValid()) {
+        addSectionHeader(QStringLiteral("Use"));
+        m_referenceCard =
+            new GalleryComponentReferenceCard(reference, m_bilingualDocumentationEnabled, this);
+        if (m_referenceCard->languageSelector()) {
+            connect(m_referenceCard, &GalleryComponentReferenceCard::codeLanguageChanged, this,
+                    &GalleryComponentPage::setCodeLanguage);
+        }
+        addContentWidget(m_referenceCard);
+    } else {
+        LOG_WARN(QStringLiteral("GalleryComponentPage reference missing routeId=%1 title=%2")
+                     .arg(entry.routeId, entry.title));
+    }
+
+    addSectionHeader(QStringLiteral("Live examples"));
+    if (entry.categoryId == QStringLiteral("spatial")) {
+        auto* settingsButton = new fluent::basicinput::Button(QStringLiteral("3D settings"), this);
+        settingsButton->setObjectName(QStringLiteral("gallerySpatialSettingsLink"));
+        settingsButton->setIconGlyph(Typography::Icons::Settings);
+        addHeaderAction(settingsButton);
+        connect(settingsButton, &fluent::basicinput::Button::clicked, this,
+                [this] { emit routeActivated(QStringLiteral("settings")); });
+        auto* status = addBodyText(QString());
+        status->setObjectName(QStringLiteral("gallerySpatialModeStatus"));
+        auto& settings = GallerySettings::instance();
+        const auto updateStatus = [status, &settings] {
+            const bool enabled = settings.spatialAvailable() && settings.spatialModeEnabled();
+            status->setText(
+                enabled ? QStringLiteral("3D is on. All examples follow Settings > 3D Gallery.")
+                        : QStringLiteral("2D is on. Enable 3D in Settings > 3D Gallery."));
+        };
+        connect(&settings, &GallerySettings::spatialModeEnabledChanged, status, updateStatus);
+        connect(&settings, &GallerySettings::spatialAvailabilityChanged, status, updateStatus);
+        updateStatus();
+    }
+    // A component page without samples is a coverage gap in the sample catalog,
+    // not a normal state — surface it loudly.
+    // zh_CN: 组件页没有任何示例说明示例目录存在覆盖缺口，不是正常状态——大声暴露出来。
+    if (samples.isEmpty()) {
+        LOG_WARN(QStringLiteral("GalleryComponentPage samples missing routeId=%1 title=%2")
+                     .arg(entry.routeId, entry.title));
+    }
+    auto* examples = new QWidget(this);
+    m_samplesLayout = new QVBoxLayout(examples);
+    m_samplesLayout->setContentsMargins(0, 0, 0, 0);
+    m_samplesLayout->setSpacing(16);
+    addContentWidget(examples);
+    const bool hasSupplementary =
+        std::any_of(samples.cbegin(), samples.cend(),
+                    [](const GallerySample& sample) { return sample.supplementary; });
+    if (hasSupplementary) {
+        auto* moreExamples = new QWidget(this);
+        m_moreSamplesLayout = new QVBoxLayout(moreExamples);
+        m_moreSamplesLayout->setContentsMargins(0, 0, 0, 0);
+        m_moreSamplesLayout->setSpacing(16);
+        auto* more = new fluent::layout::Expander(this);
+        more->setObjectName(QStringLiteral("galleryMoreSpatialExamples"));
+        more->setHeaderText(QStringLiteral("More component combinations"));
+        more->setContentWidget(moreExamples, fluent::WidgetOwnership::Owned);
+        addContentWidget(more);
+    }
+    if (!options.deferSamples) {
+        while (hasPendingSamples())
+            buildNextSample();
+    }
+
+    if (!entry.relatedRouteIds.isEmpty()) {
+        addSectionHeader(QStringLiteral("Category"));
+        for (const QString& relatedRouteId : entry.relatedRouteIds) {
+            const GalleryNavigationItem* relatedItem = navigationViewModel.itemById(relatedRouteId);
+            if (!relatedItem)
+                continue;
+            QString relatedDescription;
+            if (const GalleryContentEntry* relatedEntry = galleryContentEntry(relatedRouteId))
+                relatedDescription = relatedEntry->description;
+            auto* card =
+                new GalleryEntryCard(relatedItem->id, relatedItem->title, relatedDescription, this);
+            // Categories have no per-control art; render their nav glyph instead.
+            // zh_CN: 分类没有控件图片，改用其导航字形图标。
+            if (relatedItem->kind != GalleryNavigationItem::Kind::ComponentRoute)
+                card->setIconGlyph(relatedItem->iconGlyph);
+            connect(card, &GalleryEntryCard::activated, this, &GalleryContentPage::routeActivated);
+            addContentWidget(card);
+        }
+    }
+
+    LOG_DEBUG(QStringLiteral("GalleryComponentPage created routeId=%1 samples=%2 related=%3")
+                  .arg(entry.routeId)
+                  .arg(samples.size())
+                  .arg(entry.relatedRouteIds.size()));
+}
+
+void GalleryComponentPage::buildNextSample()
+{
+    if (!hasPendingSamples())
+        return;
+    const GallerySample& sample = m_samples.at(m_nextSample);
+    auto* card = m_bilingualDocumentationEnabled ? new GallerySampleCard(routeId(), sample, this)
+                                                 : new GallerySampleCard(sample, this);
+    if (GalleryCodeBlock* block = card->codeBlock()) {
+        if (block->languageSelector()) {
+            connect(block, &GalleryCodeBlock::codeLanguageChanged, this,
+                    &GalleryComponentPage::setCodeLanguage);
+            block->setCodeLanguage(m_codeLanguage);
+        }
+    }
+    (sample.supplementary ? m_moreSamplesLayout : m_samplesLayout)->addWidget(card);
+    m_sampleCards.append(card);
+    ++m_nextSample;
+    if (m_sampleThemeExplicit)
+        card->setPreviewThemeOverride(m_sampleTheme);
+}
+
+void GalleryComponentPage::setCodeLanguage(GalleryCodeLanguage language)
+{
+    if (m_codeLanguage == language)
+        return;
+
+    m_codeLanguage = language;
+    if (m_referenceCard)
+        m_referenceCard->setCodeLanguage(language);
+    for (GallerySampleCard* card : m_sampleCards) {
+        if (card && card->codeBlock())
+            card->codeBlock()->setCodeLanguage(language);
+    }
+}
+
+void GalleryComponentPage::onThemeUpdated()
+{
+    GalleryContentPage::onThemeUpdated();
+    if (!m_sampleThemeExplicit)
+        m_sampleTheme = currentTheme();
+    if (m_themeButton)
+        m_themeButton->onThemeUpdated();
+    if (m_referenceCard)
+        m_referenceCard->onThemeUpdated();
+    updateThemeButton();
+    // Without a local override the previews follow the global theme manager directly.
+    // Reapplying an empty override here used to traverse and relayout every sample twice.
+    if (m_sampleThemeExplicit)
+        applySampleTheme();
+}
+
+void GalleryComponentPage::toggleSampleTheme()
+{
+    const FluentElement::Theme currentSampleTheme =
+        m_sampleThemeExplicit ? m_sampleTheme : currentTheme();
+    m_sampleTheme = FluentElement::themeUsesDarkAppearance(currentSampleTheme)
+                        ? FluentElement::Light
+                        : FluentElement::Dark;
+    m_sampleThemeExplicit = true;
+    updateThemeButton();
+    applySampleTheme();
+}
+
+void GalleryComponentPage::applySampleTheme()
+{
+    for (GallerySampleCard* card : m_sampleCards) {
+        if (!card)
+            continue;
+        if (m_sampleThemeExplicit)
+            card->setPreviewThemeOverride(m_sampleTheme);
+        else
+            card->clearPreviewThemeOverride();
+    }
+}
+
+void GalleryComponentPage::updateThemeButton()
+{
+    if (!m_themeButton)
+        return;
+    const FluentElement::Theme visibleTheme =
+        m_sampleThemeExplicit ? m_sampleTheme : currentTheme();
+    const QString themeName = previewThemeName(visibleTheme);
+    if (m_themeButton->property("gallerySampleTheme").toString() != themeName)
+        m_themeButton->setProperty("gallerySampleTheme", themeName);
+    const QString nextThemeName = FluentElement::themeUsesDarkAppearance(visibleTheme)
+                                      ? QStringLiteral("Light")
+                                      : QStringLiteral("Dark");
+    const QString description =
+        QStringLiteral("Preview theme: %1. Switch to %2.").arg(themeName, nextThemeName);
+    m_themeButton->setAccessibleName(description);
+    fluent::status_info::ToolTip::attach(m_themeButton, description);
+    const QString iconGlyph = previewThemeGlyph(visibleTheme);
+    m_themeButton->setProperty("gallerySampleThemeGlyph", iconGlyph);
+    m_themeButton->setIconGlyph(iconGlyph, kThemeButtonIconSize);
+    m_themeButton->update();
+}
+
+} // namespace fluent::gallery
